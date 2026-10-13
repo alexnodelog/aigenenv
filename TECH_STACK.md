@@ -269,7 +269,8 @@ One language, one platform, one deployment.
 
 | Category | Default | Alternative | Prohibited |
 |---|---|---|---|
-| Framework | Next.js | — | — |
+| UI library | React | — | — |
+| Framework | Next.js (routing, rendering, build) | — | — |
 | Server logic | Route handlers / server actions | — | A separate backend service — that is `web-api` |
 | Styling | Tailwind CSS + shadcn/ui | — | — |
 | Client state | Zustand | — | — |
@@ -285,12 +286,32 @@ Track B minus the templates.
 
 | Category | Default | Alternative | Prohibited |
 |---|---|---|---|
-| Frontend | Next.js | — | — |
+| UI library | React | — | — |
+| Frontend framework | Next.js | — | — |
 | Backend | FastAPI | — | — |
 | API boundary | Versioned prefix `/api/v1` | — | Unversioned public API |
 | Client types | Generated from OpenAPI via `openapi-typescript` | — | Hand-maintained duplicate types |
-| CORS | Explicit allowlist, environment-driven | — | `allow_origins=["*"]` in production |
+| Frontend → backend wiring | Same-origin proxy (see below) | Direct cross-origin call with an explicit CORS allowlist | Hard-coded backend URLs in source |
+| Auth tokens | HTTP-only cookies, same-origin | Bearer tokens in memory | Tokens in `localStorage` |
 | Cold start | Documented and handled in the UI | — | Pretending it will not happen |
+
+**How the two deployments connect.** They do not talk to each other. The frontend is
+static files on a CDN; the JavaScript runs in the user's browser and calls the backend
+over HTTP. Only two settings join them: the backend's URL, injected into the frontend at
+build time as an environment variable, and the frontend's origin, listed in the backend's
+CORS allowlist. A mismatch between those two is the most common failure in this archetype.
+
+**Prefer a same-origin proxy.** Configure the frontend host to forward `/api/*` to the
+backend instead of having the browser call the backend's domain directly. Then every
+request is same-origin from the browser's point of view: no CORS configuration, and
+cookie-based sessions work without `SameSite=None` gymnastics. A project MAY instead call
+the backend cross-origin, but then the CORS allowlist MUST be environment-driven and the
+cookie policy MUST be documented.
+
+**Cold start is not solved by either approach.** A free-tier backend that sleeps after
+idle takes tens of seconds to wake. The first request MUST surface that state in the UI
+rather than appearing broken. If always-on response time is a requirement, move the
+backend to an always-free VM instead of a sleeping free tier.
 
 ### 5.7 Mobile
 
