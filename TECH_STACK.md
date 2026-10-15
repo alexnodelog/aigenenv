@@ -420,7 +420,163 @@ change rather than a follow-up task.
 
 ---
 
-## 9. Changing This Document
+## 9. Installation Checklist
+
+This section lists **what must exist** on a machine for each archetype. It does not explain
+how to install anything — that belongs to `manuals/`. Treat it as the completeness check:
+if a project needs something that is not listed here, this document is wrong and must be
+amended before the project starts.
+
+Scope note: this is the target stack. Everything the archetype will ever need through its
+final deployed state is listed, including items only needed at release time.
+
+### 9.1 Base — required for every archetype
+
+| Requirement | Scope | Note |
+|---|---|---|
+| Git | System | — |
+| GitHub account | Account | Free. Public repo required for GitHub Pages |
+| GitHub CLI (`gh`) | System | Releases, PRs, workflow runs from the terminal |
+| VS Code | System | — |
+| CLI coding agent | System | — |
+| uv | System | Required even for TypeScript-only projects |
+| pre-commit | Tool (`uv tool install`) | — |
+
+**Why uv is in the base list.** pre-commit is a Python application. Even a project with no
+Python code needs a Python tool runner to install the hooks, and uv provides that without
+a separate Python installation.
+
+### 9.2 PC App — Python
+
+| Requirement | Scope | Note |
+|---|---|---|
+| Python 3.12+ | Managed by uv | No separate installer needed |
+| PySide6 | Project dependency | Bundles the Qt runtime **and** the Qt tools (`pyside6-designer`, `pyside6-uic`, `pyside6-rcc`). No separate Qt installation |
+| C toolchain | **System — required** | Nuitka compiles to C. Windows: MSVC Build Tools, or let Nuitka fetch MinGW64 on first run. macOS: Xcode Command Line Tools. Linux: gcc or clang, plus ccache |
+| nuitka, zstandard, patchelf | Auto-installed | `pyside6-deploy` installs these itself on first run; patchelf on Linux only |
+| Inno Setup | System — Windows only | Installer packaging |
+| Qt runtime libraries | System — Linux only | `libxcb`, `libxkbcommon`, `libGL` and friends; absent on minimal distros and server images |
+
+The C toolchain is the single most common cause of a first build failing on a fresh
+machine. Nothing in `uv sync` reveals that it is missing.
+
+### 9.3 PC App — Electron
+
+| Requirement | Scope | Note |
+|---|---|---|
+| Node.js LTS | System | — |
+| pnpm | System (via corepack) | — |
+| Native module build toolchain | **System — required** | better-sqlite3 is rebuilt against Electron's ABI. Windows: MSVC Build Tools + Python. macOS: Xcode Command Line Tools. Linux: build-essential |
+| Playwright browsers | Project (`pnpm exec playwright install`) | Downloaded, not bundled |
+| Code signing certificate | Account — paid, optional | Unsigned Windows builds trigger SmartScreen warnings; unsigned macOS builds require a Gatekeeper override. Defer until distribution matters |
+
+Cross-building installers for another OS is **not** supported practice here. Use a GitHub
+Actions matrix with real runners per OS instead of Wine or equivalents.
+
+### 9.4 Web — Static
+
+| Requirement | Scope | Note |
+|---|---|---|
+| Node.js LTS, pnpm | System | — |
+| wrangler | Project dependency | Cloudflare deploys and local preview |
+| Cloudflare account | Account | Free |
+
+### 9.5 Web — Python
+
+| Requirement | Scope | Note |
+|---|---|---|
+| Python 3.12+ | Managed by uv | — |
+| Tailwind standalone CLI | System — Track B only | A single binary. Keeps Node out of this archetype entirely |
+| Docker or Podman | System — optional | Local parity with the deployed container |
+| Render account | Account | Free tier sleeps after idle |
+| Streamlit Community Cloud account | Account — Track A only | Free |
+
+No Node.js. If a project in this archetype reaches for npm, it has outgrown the archetype
+and should move to `web-ts` or `web-api`.
+
+### 9.6 Web — TypeScript
+
+| Requirement | Scope | Note |
+|---|---|---|
+| Node.js LTS, pnpm | System | — |
+| wrangler | Project dependency | Also runs D1 locally; no separate database install |
+| Playwright browsers | Project | — |
+| Cloudflare account | Account | Free |
+
+### 9.7 Web — Split
+
+Everything in §9.5 (Track B backend) plus everything in §9.6, minus wrangler's D1 usage.
+Additionally:
+
+| Requirement | Scope | Note |
+|---|---|---|
+| Render account | Account | Backend |
+| Cloudflare account | Account | Frontend and `/api/*` proxy |
+| Docker or Podman | System — optional | Backend parity |
+
+### 9.8 Mobile
+
+| Requirement | Scope | Note |
+|---|---|---|
+| Node.js LTS, pnpm | System | — |
+| Expo CLI, EAS CLI | Run via `npx` | No global install |
+| Expo account | Account | Free, ~30 builds/month |
+| Expo Go app | Phone | Enough on its own for early development |
+| Android Studio + Android SDK + emulator image | System — conditional | Needed only for a local emulator or a local development build |
+| JDK 17 | System — conditional | Same condition as above |
+| Watchman | System — macOS only | — |
+| Maestro CLI | System | Requires Java |
+| Google Play developer account | Account — one-time fee | Only at store release |
+| macOS + Xcode + Apple Developer membership | System + Account — deferred | iOS only. EAS Build compiles iOS in the cloud, so no Mac is required for builds — but App Store submission requires the paid membership |
+
+**The conditional rows matter.** With Expo Go on a physical device and EAS cloud builds,
+none of Android Studio, the Android SDK, or a JDK is needed. Install them only when an
+emulator or a local build is actually wanted. On a restricted work PC, that distinction is
+the difference between "this archetype is usable here" and "it is not".
+
+### 9.9 Modules
+
+| Requirement | Scope | Note |
+|---|---|---|
+| Ollama | System — AI/RAG, local models | — |
+| Model weights | Disk — AI/RAG | Multi-gigabyte downloads. Budget disk space and first-run time |
+| CUDA toolkit / GPU drivers | System — AI/RAG, optional | CPU inference works; GPU is a speed choice |
+| sentence-transformers, FAISS | Project dependencies | — |
+| Model provider API key | Account — AI/RAG, hosted models only | Usage-based cost. Never committed |
+
+### 9.10 OS build toolchain summary
+
+The items below are the OS-level prerequisites that package managers cannot install for
+you. Everything else in this document installs through uv, pnpm, or a project dependency.
+
+| OS | Install | Needed for |
+|---|---|---|
+| Windows | Visual Studio Build Tools (C++ workload) | `pc-app-python` (Nuitka), `pc-app-electron` (native modules) |
+| Windows | Inno Setup | `pc-app-python` installers |
+| macOS | Xcode Command Line Tools | `pc-app-python`, `pc-app-electron` |
+| macOS | Watchman | `mobile` |
+| Linux | build-essential (gcc), ccache | `pc-app-python`, `pc-app-electron` |
+| Linux | Qt runtime libraries | `pc-app-python` |
+| Any | JDK 17 | `mobile`, only with a local emulator or Maestro |
+
+### 9.11 Total cost at the target state
+
+| Item | Cost | Triggered by |
+|---|---|---|
+| Everything in §9.1 through §9.10 not listed below | Free, commercial use permitted | — |
+| Google Play developer account | One-time fee | Publishing an Android app to the store |
+| Apple Developer membership | Yearly | Publishing an iOS app — deferred |
+| Windows / macOS code signing certificate | Yearly, optional | Distributing desktop builds without OS warnings |
+| Hosted model API usage | Per-use | AI/RAG module with hosted models instead of Ollama |
+| Oracle Cloud Always Free | Free, card required for identity verification | Replacing a sleeping free-tier backend with an always-on one |
+
+Nothing else in this stack requires payment at any stage, including the final deployed
+state. Vercel's free tier is excluded from the stack as a default precisely because its
+non-commercial restriction would break that guarantee.
+
+---
+
+## 10. Changing This Document
 
 A technology selection changes only when:
 
