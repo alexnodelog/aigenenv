@@ -324,7 +324,9 @@ backend to an always-free VM instead of a sleeping free tier.
 | Secure storage | expo-secure-store | — | Tokens in AsyncStorage |
 | Unit tests | Jest (`jest-expo`) | — | — |
 | E2E | Maestro | — | — |
-| Build | EAS Build | — | — |
+| Android build | **Local** — `npx expo run:android`, or `eas build --local` | EAS cloud build | A pipeline that only works through the cloud |
+| iOS build | EAS cloud build | Local on macOS + Xcode | — |
+| Device testing | Android emulator | Physical device over USB; Expo Go on the same LAN | Depending on Expo Go as the only test path |
 | OTA updates | EAS Update | — | Shipping native changes as OTA |
 
 **Distribution path**, in order:
@@ -521,18 +523,25 @@ Additionally:
 | Node.js LTS, pnpm | System | — |
 | Expo CLI, EAS CLI | Run via `npx` | No global install |
 | Expo account | Account | Free, ~30 builds/month |
-| Expo Go app | Phone | Enough on its own for early development |
-| Android Studio + Android SDK + emulator image | System — conditional | Needed only for a local emulator or a local development build |
-| JDK 17 | System — conditional | Same condition as above |
+| Android Studio + Android SDK + emulator image | **System — required** | Local builds and the emulator. The only build path that survives a restricted network |
+| JDK 17 | **System — required** | Gradle. Android Studio bundles a JDK, but set `JAVA_HOME` explicitly rather than relying on it |
+| Expo Go app | Phone — optional | Fast iteration convenience. Requires the phone and the PC on the same reachable network |
 | Watchman | System — macOS only | — |
 | Maestro CLI | System | Requires Java |
 | Google Play developer account | Account — one-time fee | Only at store release |
 | macOS + Xcode + Apple Developer membership | System + Account — deferred | iOS only. EAS Build compiles iOS in the cloud, so no Mac is required for builds — but App Store submission requires the paid membership |
 
-**The conditional rows matter.** With Expo Go on a physical device and EAS cloud builds,
-none of Android Studio, the Android SDK, or a JDK is needed. Install them only when an
-emulator or a local build is actually wanted. On a restricted work PC, that distinction is
-the difference between "this archetype is usable here" and "it is not".
+**Why the local toolchain is required rather than optional.** Expo is often described as
+cloud-first, but `npx expo run:android` and `eas build --local` run the entire Android
+build on the developer's machine. That path is the default here because it is the only one
+that works when outbound access to a build service is blocked, when a personal phone may
+not join the network, or when client isolation prevents a phone from reaching the PC's
+bundler. Gradle still fetches dependencies from Maven on a first build, but once the cache
+is warm the loop is local. EAS cloud build remains available and is the right choice when
+the network allows it — it just cannot be the foundation.
+
+iOS is the exception and stays deferred: a local iOS build requires macOS and Xcode, so
+for iOS the cloud build is the only option short of buying a Mac.
 
 ### 9.9 Modules
 
@@ -557,7 +566,8 @@ you. Everything else in this document installs through uv, pnpm, or a project de
 | macOS | Watchman | `mobile` |
 | Linux | build-essential (gcc), ccache | `pc-app-python`, `pc-app-electron` |
 | Linux | Qt runtime libraries | `pc-app-python` |
-| Any | JDK 17 | `mobile`, only with a local emulator or Maestro |
+| Any | JDK 17 | `mobile` — Gradle builds and Maestro |
+| Any | Android Studio + Android SDK | `mobile` — local builds and emulator |
 
 ### 9.11 Total cost at the target state
 
@@ -573,6 +583,39 @@ you. Everything else in this document installs through uv, pnpm, or a project de
 Nothing else in this stack requires payment at any stage, including the final deployed
 state. Vercel's free tier is excluded from the stack as a default precisely because its
 non-commercial restriction would break that guarantee.
+
+### 9.12 Network dependence
+
+Every archetype needs network access once, to install. What differs is what happens after
+that. On a restricted or filtered network, the column that matters is the middle one.
+
+| Archetype | First setup | Development loop | Release |
+|---|---|---|---|
+| `pc-app-python` | Network | **Fully offline** | Local build; network only to upload the artifact |
+| `pc-app-electron` | Network | **Fully offline** | Local build; network only to upload the artifact |
+| `web-static` | Network | **Fully offline** | Network — the platform is the product |
+| `web-python` | Network | **Fully offline** | Network |
+| `web-ts` | Network | Offline, except `wrangler` features that proxy to Cloudflare | Network |
+| `web-api` | Network | **Fully offline** | Network |
+| `mobile` | Network, including Gradle's first dependency fetch | **Offline once the Gradle cache is warm** | Android: local. iOS: network |
+| AI/RAG module | Network for model download | **Fully offline with Ollama** | — |
+
+Two rules follow from this table.
+
+A project's test suite MUST run offline. Tests that reach the network are integration
+tests, MUST be marked as such, and MUST be excluded from the default test run. CI is the
+only place where network availability may be assumed.
+
+Dependency caches are treated as assets, not scratch space. The uv cache, the pnpm store,
+and the Gradle cache turn a one-time network requirement into permanent offline capability
+and MUST NOT be cleared casually. Every package manager in this stack has an offline mode
+(`uv sync --offline`, `pnpm install --offline`, `gradle --offline`), and a developer on a
+restricted network should know they exist.
+
+**The desktop archetypes are the safest choice under network restriction.** Nothing in
+`pc-app-python` or `pc-app-electron` requires a network after setup, through to a signed,
+shippable artifact. When a project could reasonably be either a desktop app or a web
+service and the target environment is locked down, that is a real argument for desktop.
 
 ---
 
