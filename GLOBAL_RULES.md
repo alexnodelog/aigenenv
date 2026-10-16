@@ -157,10 +157,16 @@ Directory layout beyond the above is set per archetype in `rules/<project>.md`.
 
 ### 4.1 The dependency rule
 
-Business logic MUST NOT depend on infrastructure. Concretely, code that expresses what the
-application *does* MUST NOT import a database driver, a web framework, a GUI toolkit, an
-HTTP client, a cloud SDK, or a model provider SDK. `TECH_STACK.md` §8 lists the specific
-prohibitions per stack.
+Business logic MUST NOT depend on infrastructure. Code that expresses what the application
+*does* MUST NOT directly import or reference:
+
+- A database driver or ORM session — SQLite, PostgreSQL, D1, SQLAlchemy, Drizzle
+- A vector store client — FAISS, Qdrant, pgvector, sqlite-vec
+- A model provider SDK — OpenAI, Ollama, Gemini, Anthropic
+- An HTTP client or any network library
+- A hosting or cloud provider SDK
+- A web framework, GUI toolkit, or UI library — FastAPI, Next.js, PySide6, React, Electron
+- The filesystem, the clock, or randomness, where the result affects testability
 
 Dependencies point inward: UI → application logic → domain. Never the reverse. The domain
 layer knows nothing about what calls it.
