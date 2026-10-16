@@ -16,8 +16,8 @@ satisfies the higher principle wins.
 3. **Reproducibility.** A clean clone plus the documented commands produces a working
    environment, every time.
 4. **The human owns every line**, however much of it the agent wrote.
-5. **Vendor independence.** Anything external is replaceable behind an interface the
-   project owns.
+5. **Vendor independence.** Where the project has business logic, what that logic depends
+   on is replaceable behind an interface the project owns (§8.2).
 6. **Explicit over implicit.**
 
 ### What simplicity means here
@@ -120,9 +120,12 @@ for approval that was required beforehand.
 
 **Destructive operations need a way back, not just approval.** Before deleting, migrating,
 or bulk-updating data, state what will be affected, how it can be restored, and what
-query or check will confirm the result. Approval does not create a backup. If there is no
-restore path, say so and stop — that is a decision for the human, not a risk to absorb
-silently.
+query or check will confirm the result. Approval does not create a backup.
+
+When there is no restore path, say so and stop. The human may still choose to proceed, and
+that choice is theirs to make explicitly — not a risk for the agent to absorb silently. An
+agent MUST NOT infer it from a general approval given before the gap was known, and the
+remaining exposure is written into `state.md` or `DECISIONS.md` either way.
 
 **Existing uncommitted work belongs to the human.** An agent MUST NOT discard, overwrite,
 stash, or reset uncommitted changes, untracked files, or stashes it did not create.
@@ -201,9 +204,15 @@ may override that, and the override is recorded in `DECISIONS.md` with its reaso
 **What "independent" and "clean state" mean.** The reviewer is a separate session that
 never held the authoring context — not a later turn of the authoring session. It works in
 its own git worktree or a fresh clone at the branch under review, never in the author's
-working directory, which it MUST NOT reset or clean. It receives three things and nothing
-else: the task description, the diff under review, and the commands to run. Its verdict
+working directory, which it MUST NOT reset or clean. It reads the repository freely at that
+commit; what it is *told* is only the task description, the diff under review, and the
+commands to run — never the author's account of why the change is correct. Its verdict
 names the commit it examined, so a verdict cannot be carried over to a later revision.
+
+**Claim only what was observed.** A verification report states which checks ran and what
+they cover. Passing unit tests do not establish that the application starts, that a
+migration applies, or that a configuration is valid. An agent MUST NOT assert that an
+untested path works, and MUST name the paths its checks did not reach.
 
 ### 5.4 No fabricated data
 
@@ -322,9 +331,10 @@ PRD.md PLAN.md state.md known-issues.md    Phase and handoff artifacts
 tests/
 ```
 
-Plus the lockfiles and version pins the project's stack requires. A document that is
-required but never updated misrepresents the project — create these when the work needs
-them, not to satisfy a checklist.
+Plus the lockfiles and version pins the project's stack requires. These conditional files —
+not the three above, which are always required — are created when the work needs them, not
+to satisfy a checklist: a required document that is never updated misrepresents the
+project.
 
 `README.md` MUST stay accurate. A README that no longer matches the setup commands is
 worse than none, because it is trusted.
@@ -487,13 +497,22 @@ Partial success followed by a blind retry is how one charge becomes three.
 - `--no-verify` is PROHIBITED. If a hook is wrong, fix the hook.
 - Release versions follow Semantic Versioning, tagged in Git.
 - For anything distributed to someone other than its author: release artifacts are produced
-  by CI, never from a developer's machine. CI MUST verify, before release, that the full
-  test suite, type check, lint, and a clean-checkout build all pass, and that no secret is
-  present in the tree. The released artifact MUST correspond to the commit that passed
-  those checks. A release that skipped a check is rolled back, not patched forward.
+  by CI, never from a developer's machine. Before release, CI MUST run every check the
+  project configures — at minimum the full test suite and a clean-checkout build — and MUST
+  confirm no secret is present in the tree. A tool the project does not configure is
+  reported as not applicable, which is not the same as a configured check that failed or
+  was skipped. The released artifact MUST correspond to the commit that passed those
+  checks. A release that skipped a configured check is rolled back, not patched forward.
+- Before deploying, know how to get back: which version to return to, whether returning to
+  it is safe given any schema or data change already applied, and what to check afterwards.
+  A deployment whose rollback is unsafe is a Blocking decision for the human (§4), stated
+  before the deploy rather than discovered during an incident.
 - After deploying, confirm the deployed version is the intended one and that the
   application's primary function responds. A successful deploy command is not a working
   deployment.
+- When post-deploy verification fails, stop. Report what failed and what the rollback
+  options are. An agent MUST NOT deploy a fix, redeploy, or retry on its own — repeated
+  deploys during a failure turn one broken version into an unknown state.
 
 `DECISIONS.md` gets an entry when a choice deviates from the project's stated stack,
 selects a documented alternative, will be non-obvious later, or reverses an earlier
