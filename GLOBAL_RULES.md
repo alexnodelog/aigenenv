@@ -426,7 +426,18 @@ a defect. Long but clear code stays; splitting it to satisfy a number is PROHIBI
 Before adding one: does the standard library do this? Does an existing dependency? Is the
 problem big enough to justify it?
 
-- Lockfiles MUST be committed.
+- Lockfiles MUST be committed, and a dependency change ships in the same commit as the
+  lockfile change it caused. A lockfile that lags the manifest means two machines resolve
+  different versions.
+- A lockfile conflict MUST NOT be resolved by hand-editing it. Take the incoming version of
+  the lockfile, reapply the manifest change, and regenerate. Deleting the lockfile to make
+  a conflict go away is PROHIBITED — it discards the pinned versions that made the
+  environment reproducible.
+- Prerequisites a lockfile cannot install — compilers, SDKs, system libraries, runtimes
+  that must exist before setup runs — MUST be listed in `README.md`. A lockfile pins
+  libraries, not the toolchain they build against.
+- The setup commands in `README.md` MUST be the ones that actually work from a clean clone.
+  When a dependency or prerequisite changes, verifying that is part of the change.
 - A dependency added for a single function SHOULD be replaced by that function.
 - An unmaintained dependency MUST NOT be adopted. Check the last release date.
 - A dependency with an unpatched known vulnerability MUST NOT ship.
