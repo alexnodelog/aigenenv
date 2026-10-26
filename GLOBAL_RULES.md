@@ -439,6 +439,10 @@ problem big enough to justify it?
 - The setup commands in `README.md` MUST be the ones that actually work from a clean clone.
   When a dependency or prerequisite changes, verifying that is part of the change.
 - A dependency added for a single function SHOULD be replaced by that function.
+- OS-specific behaviour — credential storage, notifications, file dialogs, autostart,
+  standard paths — MUST go through a maintained cross-platform library rather than per-OS
+  API calls. Three implementations behind one interface is a last resort and needs an ADR
+  naming why no library covers it.
 - An unmaintained dependency MUST NOT be adopted. Check the last release date.
 - A dependency with an unpatched known vulnerability MUST NOT ship.
 
@@ -485,8 +489,16 @@ Partial success followed by a blind retry is how one charge becomes three.
 
 **Security.**
 
-- Secrets MUST NOT appear in source, commits, logs, or error messages. They come from the
-  environment, and `.env.example` documents every one.
+- Secrets MUST NOT appear in source, commits, logs, or error messages.
+- **Deployment secrets** — the ones the project itself needs to run: API keys, database
+  URLs, signing keys. They come from the environment, and `.env.example` documents every
+  one.
+- **End-user credentials** — the ones a person types into the application: their account
+  password, their own API token. They never come from the environment and never appear in
+  `.env.example`. They go to the OS credential store the archetype rule names, and the
+  application reads them back from there. An application that cannot reach that store
+  disables the features needing the credential; it MUST NOT fall back to a file, the
+  database, or an environment variable.
 - `.env` MUST be in `.gitignore` before the first commit.
 - All external input — user input, API responses, file contents, environment variables —
   MUST be validated at the boundary before reaching business logic.
