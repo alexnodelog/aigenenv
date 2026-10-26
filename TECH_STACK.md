@@ -231,32 +231,53 @@ Two tracks. Both deploy identically, so a project MAY start on one and move to t
 
 **Track A — Streamlit.** Internal tools, dashboards, data apps, PoCs.
 
-| Category | Default |
-|---|---|
-| Framework | Streamlit |
-| Charts | Streamlit built-ins, Plotly |
-| State | `st.session_state` |
+| Category | Default | Alternative | Prohibited |
+|---|---|---|---|
+| Framework | Streamlit | — | Gradio, Dash, Panel, NiceGUI |
+| Charts | Streamlit built-ins, Plotly | — | — |
+| State | `st.session_state` | — | — |
+| Login | `st.login` (OIDC — Google, Microsoft, …) + an email allowlist | — | A password form written in Streamlit; streamlit-authenticator |
 
 Streamlit reruns the entire script top to bottom on every interaction, keeps session state
-per user *and per tab*, offers no routing or authentication, and gives almost no control
-over CSS. Those are design choices, not bugs, and they are fine for a tool with a handful
-of known users. They are disqualifying for a public service. If the project needs login,
-URL routing, or a designed UI, it is Track B or it is `web-ts`.
+per user *and per tab*, and gives almost no control over CSS. Its login tells the app *who*
+the user is through an external identity provider; it has no accounts of its own and no
+notion of roles or permissions. Those are design choices, not bugs, and they are fine for a
+tool with a handful of known users. They are disqualifying for a public service. If the
+project needs its own accounts, designed URLs, or a designed UI, it is Track B or it is
+`web-ts`.
 
 **Track B — FastAPI + server-rendered HTML.** Public-facing apps that do not need a
 JavaScript framework.
 
 | Category | Default | Alternative | Prohibited |
 |---|---|---|---|
-| Framework | FastAPI | — | — |
-| Templates | Jinja2 | — | — |
-| Interactivity | htmx | Alpine.js for local client state | React, Vue, a bundler |
-| Styling | Tailwind CSS via its standalone CLI | Plain CSS | A Node-based asset pipeline |
-| ORM | SQLAlchemy 2.0 (`Mapped[]` declarative) | — | — |
+| Framework | FastAPI | — | Flask, Django, Litestar |
+| Templates | Jinja2, autoescape on | — | HTML built in Python strings |
+| Interactivity | htmx 2.x, vendored into the repository | htmx 4; Alpine.js for local client state | React, Vue, a bundler; scripts loaded from a third-party CDN at runtime |
+| Styling | Tailwind CSS v4 via its standalone CLI | Plain CSS | A Node-based asset pipeline; the Tailwind Play CDN |
 | Schemas | Pydantic v2, separate from ORM models | — | ORM models as API response models |
-| Migrations | Alembic | — | Hand-applied schema changes |
+| Accounts | Users table in the app's own database, server-side sessions | — | Accounts held by a hosting or database vendor's auth service |
+| Password hashing | pwdlib (Argon2) | — | passlib — unmaintained, broken on Python 3.13+ |
+| User file uploads | None by default; storage chosen by ADR | — | The local disk of a host without a persistent disk |
 | Server | Uvicorn | — | — |
 | Tests | pytest + httpx | — | — |
+
+**Why htmx 2, not 4.** htmx 4.0 shipped in August 2026 with renamed events and changed
+defaults. The htmx project keeps 2.x as its `latest` release until early 2027 and supports
+it indefinitely, and coding agents have been trained on 2.x. Choosing 4 is an ADR, and the
+agent must check which major version a project vendors before writing htmx code.
+
+**Both tracks.**
+
+| Category | Default | Alternative | Prohibited |
+|---|---|---|---|
+| Database | SQLite | PostgreSQL — required when the host has no persistent disk (§6) | — |
+| ORM | SQLAlchemy 2.0 (`Mapped[]` declarative) | — | SQLModel |
+| Migrations | Alembic | — | Hand-applied schema changes; `create_all()` on a deployed database |
+| Deploy artifact | Container image from a `Dockerfile` | The host's native Python runtime building from `uv.lock` | Docker required for local development or tests |
+
+Sharing everything below the UI is what makes a move from Track A to Track B a rewrite of
+the presentation layer only.
 
 **Agent scoping rule for this archetype.** Business logic lives under `services/` and
 contains no UI calls. Presentation lives in templates and route handlers and contains no
@@ -349,15 +370,41 @@ All selections below are free tiers that permit commercial use, except where not
 | Archetype | Default | Alternative | Notes |
 |---|---|---|---|
 | `web-static` | Cloudflare Pages | GitHub Pages, Netlify | Cloudflare: unlimited bandwidth, 500 builds/month, 100 sites. GitHub Pages requires a public repo. Netlify now meters a monthly credit allowance |
-| `web-python` | Render (free web service) | Streamlit Community Cloud (Track A), Oracle Cloud Always Free | Render free: 512 MB RAM, sleeps after idle, 30–60 s cold start. Move to Oracle Always Free when always-on matters |
+| `web-python` | Render (free web service) + Neon Free Postgres when the app keeps durable data | Oracle Cloud Always Free; **Streamlit Community Cloud — Track A, personal non-commercial practice only** | Render free: 512 MB RAM, sleeps after 15 min idle, about 1 min to wake. Neon Free: 0.5 GB per project, sleeps after 5 min idle and wakes on the next query |
 | `web-ts` | Cloudflare Workers | **Vercel — non-commercial projects only** | Cloudflare D1 provides free SQLite |
-| `web-api` | Cloudflare Pages (frontend) + Render (backend) | Oracle Cloud Always Free (both) | The only archetype spanning two platforms on free tiers |
+| `web-api` | Cloudflare Pages (frontend) + Render (backend) + Neon Free Postgres when the backend keeps durable data | Oracle Cloud Always Free (both) | The only archetype spanning two platforms on free tiers |
 | Desktop | GitHub Releases | — | — |
 | Mobile | EAS Build → internal link → Google Play | — | — |
 
 **Vercel.** Its free Hobby plan is restricted to non-commercial use. Any project that
 might be monetized MUST NOT depend on it. Cloudflare carries no such restriction, which is
 why it is the default here despite Vercel's first-party Next.js support.
+
+**Durable data on free hosting.** Render's free web service loses its filesystem on every
+restart, redeploy, and spin-down, so a SQLite file or uploaded file kept there is lost.
+Render's free Postgres expires 30 days after creation and has no backups. Any backend on
+Render's free tier that keeps durable data MUST store it outside Render, in Neon Free
+Postgres by default. The app reaches the database only through its connection URL, so
+moving to another Postgres changes one environment variable.
+
+Neon was chosen over Supabase Free. Supabase pauses a free project after 7 days of low
+activity, and the database stays down until someone restores it by hand from the
+dashboard; an internal tool left unused for a week would appear broken. Supabase's bundled
+login and file storage would also place user accounts inside one vendor. Neon provides
+Postgres only and wakes on its own.
+
+Before a project first uses Neon, confirm in Neon's current terms that the free plan
+permits commercial use, and confirm the data region if the app holds personal data. Neither
+was verified when this selection was made.
+
+**Streamlit Community Cloud.** Its terms prohibit business or commercial use and the
+processing of sensitive personal data. It is listed only for personal learning projects
+with public data. A work tool, including any public-sector tool, MUST NOT be hosted there.
+
+**Idle policies.** Free tiers sleep, pause, or reclaim idle resources by design. A project
+MUST NOT generate artificial traffic or CPU load to defeat that policy. It breaks silently
+when the pinger stops, and it risks the account. If always-on behaviour is a requirement,
+choose a host that provides it.
 
 **Platform independence.** Hosting is the single most volatile item in this document —
 free-tier terms change yearly. Business logic MUST NOT call hosting-provider-specific APIs.
@@ -488,10 +535,12 @@ Actions matrix with real runners per OS instead of Wine or equivalents.
 | Requirement | Scope | Note |
 |---|---|---|
 | Python 3.12+ | Managed by uv | — |
-| Tailwind standalone CLI | System — Track B only | A single binary. Keeps Node out of this archetype entirely |
+| Tailwind standalone CLI | System — Track B only | A single binary, pinned to a tagged v4 release. Keeps Node out of this archetype entirely |
 | Docker or Podman | System — optional | Local parity with the deployed container |
+| htmx | Vendored file — Track B only | Version and checksum recorded in `DECISIONS.md` |
 | Render account | Account | Free tier sleeps after idle |
-| Streamlit Community Cloud account | Account — Track A only | Free |
+| Neon account | Account — only when the app keeps durable data | Free, no card. Check terms and region first (§6) |
+| Streamlit Community Cloud account | Account — Track A, personal practice only | Free, non-commercial (§6) |
 
 No Node.js. If a project in this archetype reaches for npm, it has outgrown the archetype
 and should move to `web-ts` or `web-api`.
