@@ -3,10 +3,10 @@
 Web app, one Python process serves both the pages and the logic. Server-rendered, no Node,
 no bundler, no `node_modules`.
 
-`GLOBAL_RULES.md` → this file → `CLAUDE.md` → current task. Only what differs, narrows, or
-adds. RFC 2119 keywords. **Default** = use it; **Alternative** = allowed with an ADR;
-**Prohibited** = MUST NOT. The §1 table's Prohibited column covers technology choices only;
-every other prohibition is a MUST NOT where the rule it belongs to lives.
+`GLOBAL_RULES.md` → this file → `CLAUDE.md` → current task. This file holds only what
+differs from, narrows, or adds to `GLOBAL_RULES.md`. **Default** = use it; **Alternative** =
+allowed with an ADR; **Prohibited** = MUST NOT. The §1 Prohibited column covers technology
+choices only; every other prohibition sits with the rule it belongs to.
 
 Wrong archetype if there is no server logic at all (`web-static`), if the UI needs a
 JavaScript framework or real client-side state (`web-ts`, or `web-api` when the server must
@@ -23,10 +23,8 @@ holds one track, never both.
 
 Both tracks share `domain/`, `services/` and `adapters/` (§3). Moving from A to B rewrites
 `ui/` into `web/` and replaces OIDC login with the app's own accounts (§4.4); the shared
-layers stay. A move is recorded as an ADR.
-
-A Track A tool used for work is hosted like Track B (§1 Hosting). Streamlit Community Cloud
-is for personal learning projects only.
+layers stay. A move is recorded as an ADR. A Track A tool used for work is hosted like
+Track B (§1 Hosting).
 
 ---
 
@@ -50,7 +48,7 @@ is for personal learning projects only.
 | Auth — Track A | `st.login` (OIDC, `streamlit[auth]`) + an email allowlist | — | A password form written in Streamlit; streamlit-authenticator |
 | Accounts — Track B | Users table in the app's own database; server-side session table, opaque session-ID cookie; passwords hashed with Argon2 via pwdlib | — | Accounts held by a hosting or database vendor's auth service (Supabase Auth, Firebase Auth and the like); passlib; JWT for browser sessions; identity kept in a signed client-side cookie; tokens in `localStorage` |
 | User file uploads | None | Storage chosen by ADR | The local disk of a host without a persistent disk |
-| Background work | None — work finishes inside the request or rerun | FastAPI `BackgroundTasks` for best-effort, non-durable follow-ups | Threads or tasks started from a handler that must outlive it; a job-queue service (Celery, RQ) — that is a second deployment |
+| Background work | None — work finishes inside the request or rerun | FastAPI `BackgroundTasks` for best-effort, non-durable follow-ups | Threads or tasks started from a handler that must outlive it; a job-queue service (Celery, RQ) |
 | Server — Track B | Uvicorn, one process | — | Multiple workers or processes on SQLite |
 | Lint / format | Ruff | — | Black + isort + flake8 |
 | Type check | mypy strict on `domain/`, `services/` | pyright | — |
@@ -62,12 +60,12 @@ is for personal learning projects only.
 
 ## 2. Prerequisites
 
-Verify before the first build; `uv sync` does not install or reveal these.
+`uv sync` neither installs nor reveals these. Procedure: skill `python-web-release`.
 
 | Item | Scope |
 |---|---|
-| Tailwind standalone CLI | System, Track B only. Pin a tagged v4 release, never `latest`; record the version and SHA-256 in `DECISIONS.md` |
-| `static/vendor/htmx.min.js` | In the repository, Track B only. Record the version and SHA-256 in `DECISIONS.md`. The filename carries no version |
+| Tailwind standalone CLI | System, Track B only. A tagged v4 release, never `latest`; version and SHA-256 recorded in `DECISIONS.md` |
+| `static/vendor/htmx.min.js` | In the repository, Track B only. Version and SHA-256 recorded in `DECISIONS.md`. The filename carries no version |
 | Docker or Podman | System. Optional on the developer's machine; required in CI (§5.5) |
 | Host account | Render, Oracle Cloud, or Streamlit Community Cloud — whichever `DECISIONS.md` names |
 | Neon account | Account, only when the app keeps durable data. Before first use, confirm in Neon's current terms that the free plan permits commercial use, and confirm the data region if the app holds personal data; record both in `DECISIONS.md` |
@@ -130,7 +128,7 @@ Verify before the first build; `uv sync` does not install or reveal these.
   defect. Hiding a button in a template is not authorization; the use case checks.
 - `tests/test_boundaries.py` walks the imports of `domain/` and `services/` and fails on any
   framework, SQLAlchemy, or httpx; it walks `web/` and `ui/` and fails on SQLAlchemy and
-  `<app>.adapters`. That test is the boundary check the CI job and the DoD mean.
+  `<app>.adapters`. That test is the boundary check CI and §8 refer to.
 
 ---
 
@@ -172,9 +170,8 @@ Track B — one request, one thread from Uvicorn's pool.
   `HX-Request` header is present. Any URL a user can land on — directly, by bookmark, or
   through `hx-push-url` — MUST render a full page when requested without that header.
 - Work that outlives the request does not run in the web process: a free-tier host stops
-  it on spin-down without warning. `BackgroundTasks` is for effects whose loss is
-  acceptable, and nothing that costs money or writes to a third party (`GLOBAL_RULES.md` §11,
-  "Repeated and paid operations").
+  it on spin-down without warning. `BackgroundTasks` is only for effects whose loss is
+  acceptable — never one that costs money or writes to a third party.
 
 ### 4.2 Paths
 
@@ -187,13 +184,10 @@ Track B — one request, one thread from Uvicorn's pool.
 
 ### 4.3 Persistence
 
-- **Where durable data lives.** Render's free web service loses its filesystem on every
-  restart, redeploy and spin-down, and its free Postgres expires 30 days after creation
-  with no backups. An app on Render that keeps durable data stores it in Neon Free
-  Postgres. Neon sleeps after 5 minutes idle and wakes on the next query; the first query
-  after sleep is slower, and nothing else is needed. SQLite on the disk of an Oracle Cloud
-  Always Free VM is the Alternative. An app with no durable data uses SQLite in a temp dir,
-  or no database.
+- On a host without a persistent disk — Render's free web service — durable data goes to
+  PostgreSQL, Neon Free by default; Render's free Postgres is never the store of record.
+  SQLite on the disk of an Oracle Cloud Always Free VM is the Alternative. An app with no
+  durable data uses SQLite in a temp dir, or no database.
 - The app reaches the database only through `DATABASE_URL` in `Settings`. Moving to another
   PostgreSQL provider changes that variable and nothing in the code.
 - A PostgreSQL project keeps the offline default test suite on SQLite and also runs the
@@ -207,43 +201,36 @@ Track B — one request, one thread from Uvicorn's pool.
   NOT be retried by re-running the use case.
 - Alembic revisions are generated with `--autogenerate`, then read and corrected by hand.
   An autogenerated revision MUST NOT be applied unread: it misses renames, data moves and
-  server defaults, and on SQLite every `ALTER` needs batch mode.
-- `adapters/migrate.py` runs at container start, before the server: if revisions are
-  pending on SQLite, it first backs the file up beside it with
-  `sqlite3.Connection.backup` — not a file copy, since in WAL mode the `.db` file alone is
-  not a consistent snapshot — verifies the backup opens at the old revision, then runs
-  `alembic upgrade head`. On failure it exits non-zero, the server does not start, and
-  original and backup stay.
-- PostgreSQL: the app cannot dump its own database. A deploy carrying a migration is a
-  Blocking step (`GLOBAL_RULES.md` §4) that names the `pg_dump` taken before it and checks
-  that the dump restores into an empty database. Neon Free's 6-hour restore window is a
-  second line of defence, not the backup.
+  server defaults.
+- `adapters/migrate.py` runs at container start, before the server. If revisions are
+  pending on SQLite, it first backs the file up beside it with `sqlite3.Connection.backup`
+  — a file copy is PROHIBITED, since in WAL mode the `.db` file alone is not a consistent
+  snapshot — verifies the backup opens at the old revision, then runs `alembic upgrade
+  head`. On failure it exits non-zero, the server does not start, and original and backup
+  stay.
+- PostgreSQL: the app cannot dump its own database. Before a deploy that carries a
+  migration, the human takes a `pg_dump` and confirms it restores into an empty database;
+  §5.4 stops CI for this. The provider's point-in-time restore is not the backup.
 - An app holding data its users cannot recreate MUST take a backup on a schedule and keep
-  it off the database host — a dump stored only inside Neon, or a SQLite backup only on the
-  same VM, does not survive losing that host. A restore from that backup into an empty
-  database MUST have succeeded once before the app holds real data. A failed backup run
-  MUST reach the developer — a scheduled CI job that fails, not a log line nobody reads. The
-  schedule and method are recorded in `DECISIONS.md`.
+  it off the database host. A restore from that backup into an empty database MUST have
+  succeeded once before the app holds real data. A failed backup run MUST fail a scheduled
+  CI job, not only write a log line. Schedule and method are recorded in `DECISIONS.md`.
 - A database at a revision the code does not know → refuse to start, log why.
 - Shipped revisions are append-only. Fixes are new revisions.
 
 ### 4.4 Settings, credentials, errors
 
 - Settings: a frozen dataclass built once at startup by `config.py` from the environment,
-  passed explicitly. Values are validated there. A missing or invalid required variable
-  stops startup with a message naming the variable, never its value. Unlike a desktop app,
-  a server MUST NOT start on guessed defaults.
-- Deployment secrets — database URL, OIDC secret, session-signing key — come from the
-  environment and are listed in `.env.example`. Track A's `[auth]` section is the one
-  exception: `st.login` reads it from `.streamlit/secrets.toml`, which is gitignored,
-  documented by `secrets.toml.example`, and supplied by the host as a secret file.
-- Accounts live in the app's own users table, so they move with the database. A vendor's
-  auth service MUST NOT hold them.
-- This archetype names no credential store: a server has no OS credential store. A login
-  password is only ever verified, never read back, so the app stores only its Argon2 hash —
-  never logged, never placed in session state. Storing an end user's own
-  third-party credential — their API token, their mail password — needs an ADR naming how it
-  is encrypted at rest and with which deployment key.
+  validated there, passed explicitly. A missing or invalid required variable stops startup
+  with a message naming the variable, never its value. A server MUST NOT start on guessed
+  defaults.
+- Track A's `[auth]` section is the one deployment secret not in `.env.example`: `st.login`
+  reads it from `.streamlit/secrets.toml`, which is gitignored, documented by
+  `secrets.toml.example`, and supplied by the host as a secret file.
+- A server has no OS credential store, so this archetype names none. A login password is
+  only ever verified, so the app stores only its Argon2 hash and never places it in session
+  state. Storing an end user's own third-party credential — their API token, their mail
+  password — needs an ADR naming how it is encrypted at rest and with which deployment key.
 - No mail provider is selected. A feature that sends mail — password reset, address
   verification, notifications — needs an ADR naming the provider and its free-tier terms
   before it is built. Until then, a password reset is done by an administrator.
@@ -251,25 +238,26 @@ Track B — one request, one thread from Uvicorn's pool.
   `SameSite=Lax`, the row server-side, rotated on login, deleted on logout, expiring after
   a stated idle time and a stated absolute time. Failed logins are rate-limited per account
   and per client address, and a failed login says the same thing whether or not the account
-  exists. Behind the host's
-  TLS proxy, Uvicorn MUST trust that proxy's forwarded headers (`--forwarded-allow-ips`, set
-  per host), or `Secure` cookies and `url_for` produce `http://` links.
+  exists. Behind the host's TLS proxy, Uvicorn MUST trust that proxy's forwarded headers
+  (`--forwarded-allow-ips`, set per host), or `Secure` cookies and `url_for` produce
+  `http://` links.
 - Track A: `st.login` establishes who the user is, not what they may do. The composition
   root checks the email against the allowlist from `Settings` before any page runs and
   stops otherwise. A Track A app on the public internet without login MUST hold only
   public data.
-- Logs go to stdout, structured, one line per event, with a request ID. The host collects
-  them; the app writes no log files.
-- Errors shown to a user name what failed and what to do. They MUST NOT contain a
-  traceback, SQL, an internal identifier, or a file path. Track B: an exception handler
-  renders a generic page — or a fragment for htmx requests — with the request ID, and
-  `debug` is off outside development. Track A: production config sets
-  `[client] showErrorDetails = "none"`; its default shows full tracebacks to every viewer.
+- Logs go to stdout, one line per event, with a request ID. The app writes no log files.
+- User-facing errors also never contain SQL. Track B: an exception handler renders a
+  generic page — or a fragment for htmx requests — with the request ID, and `debug` is off
+  outside development. Track A: production config sets
+  `[client] showErrorDetails = "none"`; the default, `"full"`, shows tracebacks to every
+  viewer.
 - A failed request or callback leaves no partial write: the transaction rolls back.
 
 ---
 
 ## 5. Build and package
+
+Procedure: skill `python-web-release`.
 
 ### 5.1 Lock the toolchain
 
@@ -283,21 +271,13 @@ Track B — one request, one thread from Uvicorn's pool.
 
 ### 5.2 Build
 
-```
-# Track B only — regenerate the committed stylesheet
-tailwindcss -i assets/app.css -o src/<app>/web/static/app.css --minify
-
-# Container deploys only (§1 Deploy artifact)
-docker build -t <app>:<version> .
-```
-
-- Tailwind v4 is configured in `assets/app.css` (`@import "tailwindcss";`, `@source` lines
-  pointing at `web/templates/`). There is no `tailwind.config.js`.
-- The image installs with `uv sync --locked --no-dev`, runs as a non-root user, and starts
-  with `adapters/migrate.py` then the server, listening on `0.0.0.0` and the port the host
-  passes in `PORT`:
-  - Track B: `uvicorn <app>.main:create_app --factory --forwarded-allow-ips <host proxy>`
-  - Track A: `streamlit run src/<app>/streamlit_app.py --server.headless true`
+- Track B: Tailwind v4 is configured in `assets/app.css` (`@import "tailwindcss";`,
+  `@source` lines pointing at `web/templates/`). There is no `tailwind.config.js`. The
+  committed stylesheet is regenerated in the same commit as any template or `app.css`
+  change.
+- The image installs with `uv sync --locked --no-dev`, runs as a non-root user, runs
+  `adapters/migrate.py` before the server, and listens on `0.0.0.0` and the port the host
+  passes in `PORT`. Track B passes `--forwarded-allow-ips` (§4.4); Track A runs headless.
 - A project that will be deployed deploys a walking skeleton — one page, the health
   check, the real host — before any feature beyond it is built. Port, proxy, cold start and
   secrets surface there. Leaving the first real deploy until release is PROHIBITED.
@@ -306,15 +286,15 @@ docker build -t <app>:<version> .
 
 Track B exposes `GET /healthz`: 200 with the version from `pyproject.toml` and the DB
 revision when the database answers and is at head; 503 otherwise. Track A uses Streamlit's
-`/_stcore/health` for liveness; its revision check runs in the smoke test.
+built-in `/_stcore/health` for liveness; its revision check runs in the smoke test.
 
 The smoke test (`tests/smoke/`) starts the built image, waits for health, requests `/`,
 stops the container, and exits 0 — or non-zero with the reason.
 
 - It MUST NOT touch real data or real secrets: `DATA_DIR` is a fresh temp dir, the database
   is a new SQLite file migrated from empty — or, for a PostgreSQL project in CI, an empty
-  database in the service container — and every secret is a test placeholder. Login
-  is not exercised against a real identity provider.
+  database in the service container — and every secret is a test placeholder. Login is not
+  exercised against a real identity provider.
 - Timeouts: healthy within 60 s, `/` within 10 s, stopped within 10 s. A timeout fails the
   test.
 
@@ -328,28 +308,24 @@ stops the container, and exits 0 — or non-zero with the reason.
 - `version` in `pyproject.toml` is the single source; `/healthz`, the image tag and the Git
   tag read it. CI fails a tag that does not match.
 - Auto-deploy on push is off. CI triggers the host's deploy for the tagged commit after
-  every check passes (§5.5) — except when the tag adds an Alembic revision since the
-  previous tag. CI then stops before deploying and the human deploys after the backup in
-  §4.3. Container start runs migrations, so this stop is what makes the migration a
-  Blocking step rather than a written intention.
-- Rollback is a redeploy of the previous tag. It is safe only if that version runs against
-  the current schema; a migration that breaks this is stated before the deploy.
-- A free Render service sleeps after 15 minutes idle and takes about a minute to wake.
-  `README.md` tells users the first visit may be slow.
+  every check passes — except when the tag adds an Alembic revision since the previous tag.
+  CI then stops before deploying, and the human deploys after the backup in §4.3. Container
+  start runs migrations, so this stop is what makes the migration a Blocking step rather
+  than a written intention.
+- Rollback is a redeploy of the previous tag.
+- `README.md` tells users the first visit after idle may be slow.
 
 ### 5.5 CI
 
-- Push / PR: `uv sync --locked`, Ruff, mypy, pytest (offline), boundary check,
-  `alembic check` if the app persists data. A PostgreSQL project also runs the adapter tests
-  and migrations against a PostgreSQL service container. Track B also regenerates the
-  stylesheet and fails on `git diff --exit-code`. If the deploy artifact is the container
-  image, build it and run the smoke test; a project on the host's native runtime instead
-  starts the app with `uv run` and runs the same smoke checks against it.
+- Push / PR: `uv sync --locked`, Ruff, mypy, pytest offline including the boundary check,
+  `alembic check` if the app persists data. A PostgreSQL project adds the adapter tests and
+  migrations against a PostgreSQL service container. Track B regenerates the stylesheet and
+  fails on any diff. Then the smoke test — against the built image, or against `uv run` on
+  a native-runtime host.
 - Version tag: all of the above → trigger the deploy (unless §5.4 stops it) → confirm the
   deployed version and that `/` responds. Track B reads the version from `/healthz`. Track A
-  has no endpoint for it, so the human confirms the deployed commit on the host's dashboard. Allow two minutes for a cold start before failing. On failure,
-  stop and report; never redeploy or retry automatically.
-- Anything a person other than the developer uses comes from a tag that passed this job.
+  has no version endpoint, so the human confirms the deployed commit on the host's
+  dashboard.
 
 ---
 
@@ -360,17 +336,11 @@ stops the container, and exits 0 — or non-zero with the reason.
 | `domain/`, `services/` | pytest with fake ports | MUST NOT import Streamlit or FastAPI |
 | `adapters/` | pytest against a real SQLite file in `tmp_path`, schema from `alembic upgrade head`; PostgreSQL projects repeat this in CI (§4.3) | no |
 | `web/` — Track B | `TestClient` on `create_app(settings)` | yes |
-| `ui/` — Track A | `AppTest.from_function`, fake services passed as arguments | yes |
+| `ui/` — Track A | `AppTest.from_function`, fake services passed through `args` / `kwargs` | yes |
 | Built image | smoke test (§5.3) | yes |
 
 Most tests are in the first two rows. A route or page test proves the input reaches the
 right use case and the result is shown — not the rule itself.
-
-```toml
-[tool.pytest.ini_options]
-markers = ["integration: needs network or an external system"]
-addopts = "-m 'not integration'"
-```
 
 - Tests construct `Settings` explicitly. A test that passes only because the developer's
   `.env` is present is a defect.
@@ -379,9 +349,10 @@ addopts = "-m 'not integration'"
   without `HX-Request`.
 - Track B: one test renders user input containing `<script>` and asserts it comes back
   escaped.
-- Access control, both tracks: unauthenticated access is refused; user A cannot read or
-  change user B's record by guessing its ID; Track B rejects a state-changing request
-  without a CSRF token.
+- Track B: a state-changing request without a CSRF token is rejected.
+- Track A: `AppTest.from_function` runs the function's *source* as a standalone script. The
+  function MUST do its own imports and receive everything else through `args` / `kwargs`;
+  a closure variable or a name from the test module does not exist inside it.
 - Track A: every `AppTest.run()` takes a timeout, and the test asserts `at.exception` is
   empty before anything else. Tests never contact an OIDC provider; the identity is an
   argument.
@@ -391,25 +362,27 @@ addopts = "-m 'not integration'"
 
 ## 7. Where agents go wrong
 
-Check these first when reviewing a change here.
+The mistakes agents most often make here. Each breaks the rule in the section named.
 
 1. Tailwind v3 habits: `tailwind.config.js`, `@tailwind base;`, `npm install tailwindcss`.
-   This archetype is v4 and the standalone binary.
-2. htmx versions mixed: htmx 2 and 4 differ in event names, attribute inheritance, and
-   whether error responses are swapped. Check the vendored file's major version before
-   writing any `hx-` attribute or event listener.
-3. A DB write or paid call at the top level of a Streamlit script, repeated on every rerun.
+   This archetype is v4 and the standalone binary (§1, §5.2).
+2. htmx versions mixed: 2 and 4 differ in event names, attribute inheritance, and whether
+   error responses are swapped. Check the vendored file's major version before writing any
+   `hx-` attribute or event listener (§2).
+3. A DB write or paid call at the top level of a Streamlit script, repeated on every rerun
+   (§4.1).
 4. User data in `st.cache_resource`, in `st.cache_data` without the user in its arguments, or
-   in a module global — one user sees another's data.
-5. `async def` handlers calling the sync `Session` or a sync HTTP client.
+   in a module global — one user sees another's data (§4.1).
+5. `async def` handlers calling the sync `Session` or a sync HTTP client (§4.1).
 6. A SQLite file or uploads on Render's free disk; Render free Postgres as the only copy of
-   the data; a scheduled ping to keep a free service awake.
+   the data; a scheduled ping to keep a free service awake (§1, §4.3).
 7. Supabase Auth, Firebase Auth or a similar service proposed for login because it is
-   quicker. Accounts belong in the app's own users table.
-8. Logic in route handlers, pages or templates; a hidden button treated as authorization.
-9. `|safe`, `Markup`, or an f-string building HTML from user input.
-10. An autogenerated Alembic revision applied unread; `create_all()` at startup.
-11. "The deploy command succeeded, so it works." Check `/healthz` for the version.
+   quicker (§1).
+8. Logic in route handlers, pages or templates; a hidden button treated as authorization
+   (§3).
+9. `|safe`, `Markup`, or an f-string building HTML from user input (§1).
+10. An autogenerated Alembic revision applied unread; `create_all()` at startup (§4.3).
+11. "The deploy command succeeded, so it works." Check `/healthz` for the version (§5.5).
 12. Reaching for npm, React, or a CDN script to escape an htmx or Streamlit limit. That is a
     change of archetype, which needs an ADR, not a workaround.
 
@@ -422,7 +395,7 @@ Every task here:
 - [ ] Boundary check (§3) passes
 - [ ] Track A: no effect reachable by a rerun outside a callback; no user data in a shared
       cache or global. Track B: no blocking call in `async def`; no `GET` that writes
-- [ ] Tests construct `Settings` explicitly and run offline
+- [ ] Tests construct `Settings` explicitly
 
 Schema change:
 
@@ -433,7 +406,7 @@ Schema change:
 
 Auth, session, or access change:
 
-- [ ] Unauthenticated, cross-user and CSRF tests (§6) pass
+- [ ] Track B: the CSRF rejection test (§6) passes
 
 Dependencies, `Dockerfile`, static assets, or composition root change:
 
