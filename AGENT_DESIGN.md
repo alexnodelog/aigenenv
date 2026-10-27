@@ -11,8 +11,9 @@ An agent definition adds role-specific behaviour; it never relaxes a rule.
 
 **Precondition.** This design conflicts with the current `GLOBAL_RULES.md` until the changes
 in §9 are made there. No file derived from this document is deployed before those changes
-are made, every skill an agent definition names exists, and the way `CLAUDE.md` brings the
-rules into a subagent has been verified on the installed CLI.
+are made, every skill an agent definition names exists, the way `CLAUDE.md` brings the
+rules into a subagent has been verified on the installed CLI, and the human has confirmed
+that the machine agents run on holds no production credentials (§3).
 
 ---
 
@@ -110,18 +111,18 @@ public interface; `check` for every other Standard task. The orchestrator states
 in the spawn prompt; the reviewer does not choose it.
 
 **Merge check.** A verdict covers one commit, not the merge. After the human merges, the
-orchestrator answers two questions, ignoring `state.md` and `known-issues.md` throughout:
+orchestrator lets the verdict stand only when both hold, with `state.md` and
+`known-issues.md` excluded throughout:
 
-1. Did the merge apply the approved change unchanged? Compare the approved diff
-   (`BASE..approved commit`) with the merged diff (merge commit's first parent..merge
-   commit).
-2. Did the target branch receive anything besides this task since `BASE`?
+1. Every commit on the target branch between `BASE` and the merge commit's first parent
+   changes only those two files — no other code arrived while the task was open.
+2. `git diff <approved commit> <merge commit>` is empty — the merge brought in exactly the
+   approved tree, with no hand-made conflict edits.
 
-If the answers are yes and no, the merged code is exactly the code that was reviewed and the
-verdict stands. Otherwise — a conflict was resolved by hand, or another task merged first —
-a `check`-mode reviewer runs on the merge commit before any dependent task starts. Every
-merge after the first in a parallel run takes this path, which is how two individually
-correct changes that break together are caught.
+If either fails, a `check`-mode reviewer runs on the merge commit before any dependent task
+starts. In a parallel run every merge after the first fails condition 1, so it is always
+re-checked. That is a deliberate policy — two individually correct changes can break
+together — not something a smaller change scope could waive.
 
 **Approvals.** Every approval is recorded in `state.md` with the path and commit of the
 file approved. `PRD.md` is approved in the discover session, which is a single session and
@@ -142,39 +143,63 @@ changes, the human decides whether they are committed or discarded; no agent dis
 A builder is respawned only with the human's answer or new direction recorded in `state.md`,
 and receives the earlier attempts.
 
-**Checks have no outside effects, by environment, not by instruction.** Production
-credentials MUST NOT be present anywhere an agent runs: not in the repository, a worktree, or
-the shell environment the CLI starts from. Checks run with test configuration and test
-credentials only, so a mistaken command fails instead of reaching production, real user
-data, or anything that costs money or sends messages. A check that needs a live external
-service is listed separately in `PLAN.md`, uses a test or sandbox account, and runs only with
-the human's approval for that run.
+**Checks have no outside effects, by environment, not by instruction.** The machine agents
+run on holds no production credentials at all: production secrets live only in the hosting
+platform's and CI's secret stores. Checks run with test configuration and test credentials,
+so a mistaken command fails instead of reaching production, real user data, or anything that
+costs money or sends messages. Absence cannot be proven by a check the agent runs; the human
+confirms it once when setting up the machine, and that confirmation is part of the
+precondition at the top of this document.
+
+A check that needs a live external service is listed separately in `PLAN.md`, uses a test or
+sandbox account, and runs only with the human's approval for that run. It may read from and
+write to that test account only. A check that can cost money or send a message to a real
+person is never run by an agent; the human runs it. A live check is never repeated
+automatically on resume; the human decides.
 
 ### States and transitions
 
-`state.md` holds, per task: status, branch, worktree path, base commit, last returned commit,
-and latest verdict. The orchestrator writes the new status before acting on it, so a session
-that stops mid-step leaves the step it was in.
+**Persistence.** The orchestrator's checkout always stays on the branch tasks merge into.
+At every transition it writes `state.md` and commits it there before acting, so a session
+that stops mid-step leaves a committed record of the step it was in. Task branches start
+from that branch and never change `state.md`, so a merge always keeps the target branch's
+version; there is nothing to reconcile. The orchestrator is the only writer even when tasks
+run in parallel — each task has its own section in the one file.
+
+**The plan** has its own status in `state.md`, separate from the tasks:
 
 | From | To | When | Human |
 |---|---|---|---|
-| `planned` | `spawned` | Worktree created and verified; recorded before the builder is spawned | — |
+| — | `drafting` | Planner spawned; recorded first | — |
+| `drafting` | `awaiting approval` | Planner `DONE`, verified | — |
+| `drafting` | `blocked` | Planner `BLOCKED`, or a malformed or unverifiable return | — |
+| `blocked` | `drafting` | The human's answer is recorded; planner respawned | Yes |
+| `awaiting approval` | `approved` | The human approves; every task in `PLAN.md` becomes `planned` | Yes |
+| `awaiting approval` | `drafting` | The human asks for changes | Yes |
+| `approved` | `drafting` | A task needs amending (task `blocked` → `planned` below) | Yes |
+
+**Each task:**
+
+| From | To | When | Human |
+|---|---|---|---|
+| `planned` | `spawned` | The plan is `approved`; worktree created and verified | — |
 | `spawned` | `built` | Builder `DONE`, verified against git | — |
 | `spawned` | `blocked` | Builder `BLOCKED`, or a malformed or unverifiable builder return | — |
 | `spawned` | `struck out` | Builder `STRUCK_OUT` | — |
 | `blocked`, `struck out` | `spawned` | The human's answer is recorded | Yes |
-| `blocked` | `planned` | The human decides the task itself must change; the planner amends it | Yes |
-| `built` | `reviewing` | Review worktree created; recorded before the reviewer is spawned | — |
+| `blocked` | `planned` | The human decides the task must change; it is `planned` again once the amended plan is `approved` | Yes |
+| `built` | `reviewing` | Review worktree created | — |
 | `reviewing` | `approved` / `changes required` / `unverified` | Reviewer verdict, verified | — |
 | `changes required` | `spawned` | Fresh builder for rework | — |
 | `unverified` | `reviewing` or `blocked` | The human decides: review again, or treat as blocked | Yes |
 | `approved` | `merged` | The human merges | Yes |
-| `merged` | `done` | Merge check: verdict stands, or the check-mode review approves | — |
-| `merged` | `integration failed` | The merge-commit review returns `changes required` or `unverified` | — |
-| `integration failed` | `done` | A fix task the human added is `done` | Yes |
+| `merged` | `done` | Merge check: verdict stands, or the merge-commit review approves | — |
+| `merged` | `unverified` | The merge-commit review returns `unverified` | — |
+| `merged` | `integration failed` | The merge-commit review returns `changes required` | — |
+| `integration failed` | `done` | A fix task added by the human is merged, and the check-mode review of that merge commit approves | Yes |
 
-No other transition exists. In particular nothing returns to `approved` except through a new
-review, and nothing is reverted automatically: undoing a merge is the human's action.
+No other transition exists. Nothing returns to `approved` except through a new review, and
+nothing is reverted automatically: undoing a merge is the human's action.
 
 **Resuming.** A new orchestrator session compares `state.md` with git before spawning
 anything. For a task left `spawned` or `reviewing`, it inspects both the branch and the
@@ -194,7 +219,7 @@ One writer per file at any moment. This is what makes parallel builders mergeabl
 | `PLAN.md` | `planner` | Each task names: its requirement, what blocks it, file scope, seams under test, done condition, `parallel: yes/no`. The planner has no `Bash`; the orchestrator commits the file once approved |
 | Code, tests | `builder`, on `task/<id>` only | |
 | `DECISIONS.md`, `README.md`, `.env.example` | `builder`, in the commit that caused the change | |
-| `state.md` | `orchestrate`; a single session when there is no orchestrator | Committed only on the branch tasks merge into. Task branches never change it |
+| `state.md` | `orchestrate`; when no orchestrator is running, the single session that is — including the `discover` session recording the PRD approval | Committed only on the branch tasks merge into, at every transition. Task branches never change it |
 | `known-issues.md` | `orchestrate`, after the human decides to defer | Same branch as `state.md`. A subagent proposes, never writes |
 | Review verdict | Nobody writes a file | The orchestrator records it in `state.md`; the approved verdict line goes into the merge commit message the human makes |
 
@@ -343,8 +368,9 @@ section, never by editing someone else's text.
 - Tests go through the agreed seam and assert behaviour, never internals. An expected value
   comes from the requirement or a worked example, never recomputed the way the code does.
 - No coverage target.
-- Refactoring happens only while all tests pass, keeps them passing, and changes no
-  behaviour; it is never mixed into the commit of a behaviour change.
+- Refactoring changes no behaviour, and afterwards every check that passed before it still
+  passes; checks that already failed at `BASE` stay recorded, not counted against it. It is
+  never mixed into the commit of a behaviour change.
 - Returns `DONE` only with every change committed and the worktree clean.
 - A bug starts with a test that fails for the stated reason; when the cause is unknown, it
   follows `diagnose`.
