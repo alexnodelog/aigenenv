@@ -338,6 +338,16 @@ project.
 `README.md` MUST stay accurate. A README that no longer matches the setup commands is
 worse than none, because it is trusted.
 
+Once the project has more than one running part, a database, or an external service,
+`README.md` MUST have an **Architecture** section: what the parts are, how they connect,
+where data is stored, and which external services are used, with a Mermaid diagram. It is
+written in the commit that first creates that structure and updated in every commit that
+adds, removes, or replaces a part, a data store, or an external service.
+
+**The schema and API contracts live in code.** Models and migrations are the source of the
+database schema; route definitions are the source of the API. A table list, ERD, or API
+list is generated from them when needed and MUST NOT be maintained by hand.
+
 **Filenames MUST NOT contain version numbers.** Not `rules_v2.md`, not `api_final.py`. Git
 is the version record. A file needing a version in its name should have been edited
 instead of copied.
@@ -561,7 +571,7 @@ Procedure: skill `adr`.
 - [ ] Traces to a requirement in `PRD.md`; the commit names its task
 - [ ] Verified per §5.3 by something that did not produce the change
 - [ ] Public functions typed
-- [ ] `README.md` updated if setup or usage changed
+- [ ] `README.md` updated if setup, usage, or the Architecture section's content changed
 - [ ] `DECISIONS.md` updated if a decision needs an ADR
 - [ ] `.env.example` updated if a variable was added
 - [ ] `state.md` reflects reality
