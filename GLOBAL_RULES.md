@@ -90,6 +90,10 @@ absence of objection. An agent that cannot find either MUST ask. When the human 
 the agent to skip a phase, that instruction is the approval, and it is recorded in
 `state.md`.
 
+In an orchestrated run the human approves in the orchestrator's session. The orchestrator
+records the approval in `state.md` with the commit of the approved file, and does not write
+`Approved:` into the phase file.
+
 Phase violations, all PROHIBITED:
 
 - Writing code during Discover or Plan, including "just a quick prototype"
@@ -159,7 +163,9 @@ change, and why — and proceeds once the human agrees. It does not treat an uns
 as permission for everything, nor as permission for nothing.
 
 Always inside scope, no separate approval needed: creating the current phase's output file
-(§3), adding or updating tests for the code being changed, and updating `state.md`.
+(§3), adding or updating tests for the code being changed, and — when no orchestrator is
+running — updating `state.md`. In an orchestrated run a subagent reports in its return
+message and only the orchestrator writes `state.md`.
 
 An agent MUST NOT, unasked: refactor or rename anything, add a dependency, fix an
 unrelated problem it noticed, or delete or rewrite a test to make a build pass. Reporting
@@ -201,13 +207,10 @@ never satisfies any row. For a §2.1 or public-interface change there is no subs
 the independent reviewer: if one cannot be arranged, the change does not ship. The human
 may override that, and the override is recorded in `DECISIONS.md` with its reason.
 
-**What "independent" and "clean state" mean.** The reviewer is a separate session that
-never held the authoring context — not a later turn of the authoring session. It works in
-its own git worktree or a fresh clone at the branch under review, never in the author's
-working directory, which it MUST NOT reset or clean. It reads the repository freely at that
-commit; what it is *told* is only the task description, the diff under review, and the
-commands to run — never the author's account of why the change is correct. Its verdict
-names the commit it examined, so a verdict cannot be carried over to a later revision.
+**Independent** means a separate session that never held the authoring context and is never
+given the author's account of why the change is correct. Its verdict names the commit it
+examined; a verdict does not carry over to a later revision. Reviewer behaviour: agent
+definition `reviewer`.
 
 **Claim only what was observed.** A verification report states which checks ran and what
 they cover. Passing unit tests do not establish that the application starts, that a
@@ -249,18 +252,15 @@ these are evaluated on their merits, and the agent stops when continuing would b
 
 ### 5.7 Handoff between sessions
 
-Standard work communicates through files at the repository root, never by carrying
-conversation context forward. A Small task that begins and ends in one session needs none
-of these files and MUST NOT create them to satisfy a checklist.
-
-| File | Holds |
-|---|---|
-| `PRD.md` | What is being built and why. Discover output |
-| `PLAN.md` | Task breakdown, order, dependencies. Plan output |
-| `state.md` | Where the work stands now, what is next, what was just verified |
-| `known-issues.md` | Problems found and deliberately deferred, with the reason |
+Standard work communicates through files at the repository root — `PRD.md`, `PLAN.md`,
+`state.md` (where the work stands, what is next, what was just verified), `known-issues.md`
+(problems deliberately deferred, with the reason) — never by carrying conversation context
+forward. A Small task that begins and ends in one session needs none of these files and
+MUST NOT create them to satisfy a checklist.
 
 Where these files exist, `state.md` MUST reflect reality before a session ends.
+
+Procedure: skill `handoff`.
 
 ### 5.8 Session start
 
@@ -281,10 +281,11 @@ else, preserving any uncommitted work exactly as it stands.
 
 ### 5.10 Orchestration
 
-When sub-agents or sub-sessions are in use, the orchestrating session routes work and
-tracks state and does not edit files itself — otherwise its context grows without bound and
-the point of sub-sessions is lost. A single session working alone is both roles and this
-rule does not apply to it.
+When subagents are in use, the orchestrating session edits only `state.md` and
+`known-issues.md`. It does not edit code, tests, `PRD.md`, or `PLAN.md`, and does not
+merge. A single session working alone is both roles and this rule does not apply to it.
+
+Procedure: skill `orchestrate`.
 
 ---
 
@@ -326,7 +327,7 @@ Additionally, once the project has anything a human other than its author will r
 Standard task has started:
 
 ```
-DECISIONS.md       ADR log (§11)
+DECISIONS.md       ADR log (§12)
 PRD.md PLAN.md state.md known-issues.md    Phase and handoff artifacts
 tests/
 ```
@@ -429,10 +430,9 @@ problem big enough to justify it?
 - Lockfiles MUST be committed, and a dependency change ships in the same commit as the
   lockfile change it caused. A lockfile that lags the manifest means two machines resolve
   different versions.
-- A lockfile conflict MUST NOT be resolved by hand-editing it. Take the incoming version of
-  the lockfile, reapply the manifest change, and regenerate. Deleting the lockfile to make
-  a conflict go away is PROHIBITED — it discards the pinned versions that made the
-  environment reproducible.
+- A lockfile conflict MUST NOT be resolved by hand-editing the lockfile or by deleting it.
+  Deleting it discards the pinned versions that made the environment reproducible.
+  Procedure: skill `lockfile-conflict`.
 - Prerequisites a lockfile cannot install — compilers, SDKs, system libraries, runtimes
   that must exist before setup runs — MUST be listed in `README.md`. A lockfile pins
   libraries, not the toolchain they build against.
@@ -543,16 +543,7 @@ decision. Entries are append-only; a reversal is a new entry, and the superseded
 with its status changed. A rule in this document that was deliberately broken is recorded
 the same way, with its reason, or it did not happen.
 
-```markdown
-## ADR-0001: <decision in one line>
-**Date:** YYYY-MM-DD
-**Status:** Accepted | Superseded by ADR-00XX
-
-**Context.** What forced a choice.
-**Decision.** What was chosen.
-**Consequences.** What this costs and rules out.
-**Alternatives.** What was rejected, and why.
-```
+Procedure: skill `adr`.
 
 ---
 
