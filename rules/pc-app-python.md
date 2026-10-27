@@ -86,7 +86,8 @@ Verify before the first build; `uv sync` does not reveal them.
 - No Qt type (`Signal`, `QObject`, `QDate`, `QModelIndex`) outside `ui/` and `main.py`.
 - A slot calls one use case and renders the result. A decision about *what the application
   does*, taken inside a slot, is a defect.
-- CI MUST fail if `domain/` or `application/` imports `PySide6` or `sqlalchemy`.
+- `tests/test_boundaries.py` walks the imports of `domain/` and `application/` and fails on
+  `PySide6` or `sqlalchemy`. That test is the boundary check the CI job and the DoD mean.
 
 ---
 
@@ -99,11 +100,13 @@ Verify before the first build; `uv sync` does not reveal them.
 - Pattern: `QThread` + worker `QObject`, `moveToThread`, start from `thread.started`,
   `finished` → `thread.quit` → `deleteLater`. Hold a reference to thread and worker until
   `finished`.
-- On close, signal workers to stop and wait with a timeout. Workers that do not return
-  MUST be waited on, not killed: a `QThread` destroyed while running takes the process
-  down. If the timeout expires, log it and tell the user the app is still finishing.
-- Work that writes files or rows MUST be cancellable at a point that leaves no partial
-  result: write to a temp file and rename, or wrap the write in a transaction.
+- On close, signal workers to stop and wait with a timeout. A `QThread` MUST NOT be killed
+  or destroyed while running — that takes the process down. If the timeout expires, the
+  close is **cancelled**: ignore the close event, keep the window alive, tell the user the
+  app is finishing, and close for real when the last worker reports `finished`.
+- Every write is atomic whether or not it can be cancelled: a file is written to a temp
+  path and renamed over the target; rows are written in a transaction. Cancellation on
+  top of that is required only for work the user can start and then abandon.
 - `processEvents()` loops and `time.sleep()` on the GUI thread are PROHIBITED.
 
 ### 4.2 Paths
@@ -134,14 +137,23 @@ Verify before the first build; `uv sync` does not reveal them.
 
 ### 4.4 Settings and errors
 
-- Settings: typed dataclass, read once at startup, passed explicitly. Unknown keys logged
-  and ignored, missing keys defaulted, a malformed file renamed aside (never deleted) and
-  replaced. The app MUST start with a broken settings file.
+- Settings: typed dataclass, read once at startup, passed explicitly. The settings file is
+  external input: wrong types and out-of-range values are rejected at parse time and take
+  defaults with a logged warning, exactly like unknown keys and missing keys.
+- A malformed file is renamed aside (never deleted) and replaced. If the rename or the
+  write fails — read-only directory, locked file — the app runs on in-memory defaults and
+  tells the user settings cannot be saved. It MUST start either way.
 - Tokens, passwords and API keys go in the OS credential store (`keyring`), never in the
-  settings file, the database, or a log line.
+  settings file, the database, or a log line. A desktop app has no deployment environment,
+  so the global rule's environment variables and `.env.example` do not apply to a user's
+  own credentials; this replaces it. If the credential store is unavailable, the features
+  needing a secret are disabled with a clear error — never stored somewhere else instead.
 - Released builds have no console: log to a rotating file in `user_log_dir`.
 - `main.py` installs `sys.excepthook` before the window opens: log the traceback, show the
-  user a plain message plus the log path. A failed slot MUST leave no partial write in the
+  user a plain message plus the log path. The log path and the migration-backup path are
+  the only exception to the global rule against paths in user-facing errors — the user owns
+  this machine and cannot send us the file otherwise. Tracebacks, SQL, and internal
+  identifiers stay out of the dialog. A failed slot MUST leave no partial write in the
   database or on disk; the window may be left showing stale data as long as the user is
   told the action failed.
 
@@ -175,8 +187,9 @@ uv run pyside6-deploy -c src/<app>/pysidedeploy.spec -f
 ### 5.3 Self-check
 
 `main.py --self-check` starts the app, opens a DB in a temp dir, applies all migrations,
-constructs the main window, processes events once, closes it, exits 0 — or non-zero with
-the reason. It MUST NOT read or write the real `user_data_dir`. Every build
+constructs the main window, runs the event loop until the window reports ready, closes it,
+exits 0 — or non-zero with the reason. Async startup work is awaited through that ready
+signal under a timeout; a timeout is a failure, not a pass. It MUST NOT read or write the real `user_data_dir`. Every build
 handed to anyone MUST pass it on its own OS. Passing tests are not evidence that the
 artifact starts.
 
@@ -275,8 +288,8 @@ Check these first when reviewing an agent's change here.
 10. "Tests pass, so the build works." Only `--self-check` on the artifact shows that.
 11. Letting `pyside6-deploy` pip-install Nuitka.
 12. `import PySide6` at module top, breaking module detection.
-13. Switching to PyInstaller to escape a Nuitka error — that is the architecture switch the
-    three-strikes rule forbids. PyInstaller for release needs an ADR.
+13. Switching to PyInstaller to escape a Nuitka error — the global three-strikes rule's
+    MUST NOT list covers switching to escape an error. PyInstaller for release needs an ADR.
 14. `create_all()` used as a migration.
 
 ---
@@ -292,7 +305,8 @@ Every task here:
 Schema change:
 
 - [ ] New migration appended, none edited; tested from the previous version, and tested
-      failing mid-migration — version unchanged, backup opens
+      failing mid-migration — original schema and rows unchanged, `user_version` unchanged,
+      backup opens
 
 Packaging, dependencies, resources, or `main.py` change:
 
