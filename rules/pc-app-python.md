@@ -4,8 +4,8 @@ Desktop app, Python only, Qt UI, single user, local data.
 
 `GLOBAL_RULES.md` → this file → `CLAUDE.md` → current task. Only what differs, narrows, or
 adds. RFC 2119 keywords. **Default** = use it; **Alternative** = allowed with an ADR;
-**Prohibited** = MUST NOT. The Prohibited column in §1 is the full prohibition list for this
-archetype; the rest of the file states the rest as MUST / MUST NOT in place.
+**Prohibited** = MUST NOT. The §1 table's Prohibited column covers technology choices only;
+every other prohibition is a MUST NOT where the rule it belongs to lives.
 
 Wrong archetype if the UI is HTML (`pc-app-electron`), if two people share the data (a web
 archetype), or if there is no window (a script).
@@ -23,7 +23,7 @@ archetype), or if there is no window (a script).
 | Persistence | SQLite via SQLAlchemy 2.0 (`Mapped[]`) | stdlib `sqlite3` for 1–2 tables | QtSql, pickle, shelve |
 | Migrations | Ordered functions on `PRAGMA user_version` (§4.3) | — | `create_all()` on an existing DB; editing a shipped migration |
 | Paths | `platformdirs` | — | Paths beside the executable or relative to cwd; writing into the install dir at runtime |
-| Settings | JSON in `user_config_dir` | TOML, read-only (`tomllib` cannot write) | INI, pickle, `QSettings` |
+| Settings | TOML in `user_config_dir`, read at startup only | JSON — required if the app writes settings back, since `tomllib` cannot write; record the ADR | INI, pickle, `QSettings` |
 | User credentials | `keyring` (OS credential store), declared as a runtime dependency | — | Credentials in the settings file, the DB, or a log line |
 | Background work | `QThread` + worker `QObject` | `concurrent.futures`, results by signal | Blocking the GUI thread; touching widgets off it; killing a running `QThread` |
 | Lint / format | Ruff | — | Black + isort + flake8 |
@@ -32,7 +32,7 @@ archetype), or if there is no window (a script).
 | Build | `pyside6-deploy`, `mode = standalone` | PyInstaller for local iteration | `onefile` for distribution; cx_Freeze, py2exe, Briefcase; distributing a dev-machine build |
 | Windows package | Inno Setup | — | — |
 | macOS package | `.app` from `pyside6-deploy` | — | — |
-| Linux package | standalone dir as `.tar.gz` | — | — |
+| Linux package | AppImage, built from the standalone dir with `appimagetool` (MIT) | `.tar.gz` of the standalone dir — record the ADR | — |
 
 ---
 
@@ -45,6 +45,7 @@ Verify before the first build; `uv sync` does not install or reveal these.
 | C compiler | System. Windows: VS Build Tools (C++), MSVC on `PATH` via `vcvarsall.bat`. macOS: Xcode CLT. Linux: gcc/clang + ccache |
 | nuitka, ordered-set, zstandard, patchelf (Linux) | Project `build` dependency group, locked (§5.1) |
 | Inno Setup (`iscc` on `PATH`) | System, Windows only |
+| `appimagetool` (downloaded AppImage, made executable) | System, Linux only; skip if the ADR chose `.tar.gz` |
 | `libxcb-cursor0`, `libxkbcommon-x11-0`, `libegl1`, `libgl1` | System, Linux only. Qt 6.5+ will not start without `libxcb-cursor0` |
 
 ---
@@ -182,12 +183,16 @@ uv run pyside6-deploy -c src/<app>/pysidedeploy.spec -f
 
 ### 5.3 Self-check
 
-`main.py --self-check` starts the app, opens a DB in a temp dir, applies all migrations,
-runs the event loop until the window reports ready, closes it, exits 0 — or non-zero with
-the reason. Startup and shutdown each run under a timeout and an overall deadline; a
-timeout is a failure, not a pass. It MUST NOT read or write the real `user_data_dir`.
+`main.py --self-check` starts the app, applies all migrations, runs the event loop until the
+window reports ready, closes it, exits 0 — or non-zero with the reason.
 
-Passing tests are not evidence that the artifact starts.
+- It MUST NOT touch the user's environment. `main.py` takes **one** root path for data,
+  config and logs; `--self-check` points it at a temp dir and disables credential-store
+  access. Adapters MUST derive their paths from that root, never call `platformdirs`
+  themselves — a test asserts that `--self-check` creates nothing under the real
+  directories.
+- Timeouts: ready within 30 s, shutdown within 10 s, whole run within 60 s. A timeout
+  exits non-zero.
 
 ### 5.4 Package
 
@@ -266,11 +271,11 @@ Check these first when reviewing a change here.
 6. `QSettings` or a settings file beside the executable.
 7. Unpatched modal dialog, or `waitSignal` without a timeout → hung test. A hung test is a
    failure, not something to rerun; `sleep` is not the fix for a flaky one.
-8. "Tests pass, so the build works." Only `--self-check` on the artifact shows that.
+8. "Tests pass, so the build works."
 9. Letting `pyside6-deploy` pip-install Nuitka; `import PySide6` at module top.
 10. Switching to PyInstaller to escape a Nuitka error — the three-strikes rule's MUST NOT
     list covers switching to escape an error.
-11. `create_all()` used as a migration.
+11. An adapter calling `platformdirs` on its own, defeating `--self-check` isolation.
 
 ---
 
@@ -291,4 +296,4 @@ Schema change:
 Packaging, dependencies, resources, or `main.py` change:
 
 - [ ] `--self-check` passes on the developer's OS during the task; anything handed to
-      another person goes through §5.5 and passes on each declared target OS
+      another person goes through §5.5
