@@ -45,7 +45,7 @@ Verify before the first build; `uv sync` does not install or reveal these.
 | C compiler | System. Windows: VS Build Tools (C++), MSVC on `PATH` via `vcvarsall.bat`. macOS: Xcode CLT. Linux: gcc/clang + ccache |
 | nuitka, ordered-set, zstandard, patchelf (Linux) | Project `build` dependency group, locked (§5.1) |
 | Inno Setup (`iscc` on `PATH`) | System, Windows only |
-| `appimagetool` (downloaded AppImage, made executable) | System, Linux only; skip if the ADR chose `.tar.gz` |
+| `appimagetool` | System, Linux only; skip if the ADR chose `.tar.gz`. Pin a tagged release, never `continuous`, and record the version and SHA-256 in `DECISIONS.md` |
 | `libxcb-cursor0`, `libxkbcommon-x11-0`, `libegl1`, `libgl1` | System, Linux only. Qt 6.5+ will not start without `libxcb-cursor0` |
 
 ---
@@ -83,7 +83,7 @@ Verify before the first build; `uv sync` does not install or reveal these.
 |---|---|---|
 | `domain/` | stdlib, `domain/` | PySide6, SQLAlchemy, `platformdirs`, `adapters/`, `ui/` |
 | `application/` | `domain/`, own `ports.py` | PySide6, SQLAlchemy, `adapters/`, `ui/` |
-| `adapters/` | `application/ports.py`, `domain/`, SQLAlchemy, `platformdirs` | PySide6, `ui/` |
+| `adapters/` | `application/ports.py`, `domain/`, SQLAlchemy | PySide6, `ui/`, `platformdirs` |
 | `ui/` | `application/`, `domain/` types, PySide6 | SQLAlchemy, `adapters/` |
 
 - No Qt type (`Signal`, `QObject`, `QDate`, `QModelIndex`) outside `ui/` and `main.py`.
@@ -113,8 +113,11 @@ Verify before the first build; `uv sync` does not install or reveal these.
 
 ### 4.2 Paths
 
-- Data → `user_data_dir`, settings → `user_config_dir`, logs → `user_log_dir`; created on
-  first run. The install directory is read-only at runtime.
+- `main.py` is the only caller of `platformdirs`. It resolves `user_data_dir`,
+  `user_config_dir` and `user_log_dir`, creates them if missing, and passes them to the
+  adapters as one frozen `Paths` dataclass. An adapter that resolves its own path cannot be
+  redirected, which is what `--self-check` depends on.
+- The install directory is read-only at runtime.
 - Bundled resources are located relative to the package (`importlib.resources`), never cwd.
 
 ### 4.3 Persistence
@@ -143,10 +146,9 @@ Verify before the first build; `uv sync` does not install or reveal these.
 - A malformed file is renamed aside (never deleted) and replaced. If the rename or write
   fails, run on in-memory defaults and tell the user settings cannot be saved. The app MUST
   start either way.
-- A desktop app holds no deployment secrets, so nothing here comes from the environment.
-  Credentials the user supplies at runtime go to `keyring`. If the credential store is
-  unavailable, features needing a secret are disabled with a clear error — never stored
-  somewhere else instead.
+- The OS credential store for this archetype is `keyring`. A desktop app has no deployment
+  secrets, so it ships no `.env.example`; every secret it holds is an end-user credential
+  under the global rule.
 - Released builds have no console: log to a rotating file in `user_log_dir`.
 - `main.py` installs `sys.excepthook` before the window opens: log the traceback, show the
   user a plain message of what failed and what to do. The dialog MUST NOT contain the
@@ -186,11 +188,9 @@ uv run pyside6-deploy -c src/<app>/pysidedeploy.spec -f
 `main.py --self-check` starts the app, applies all migrations, runs the event loop until the
 window reports ready, closes it, exits 0 — or non-zero with the reason.
 
-- It MUST NOT touch the user's environment. `main.py` takes **one** root path for data,
-  config and logs; `--self-check` points it at a temp dir and disables credential-store
-  access. Adapters MUST derive their paths from that root, never call `platformdirs`
-  themselves — a test asserts that `--self-check` creates nothing under the real
-  directories.
+- It MUST NOT touch the user's environment: `--self-check` builds the `Paths` of §4.2 from
+  subdirectories of one temp dir and disables credential-store access. A test asserts that
+  a `--self-check` run creates nothing under the real directories.
 - Timeouts: ready within 30 s, shutdown within 10 s, whole run within 60 s. A timeout
   exits non-zero.
 
@@ -200,7 +200,7 @@ window reports ready, closes it, exits 0 — or non-zero with the reason.
 |---|---|
 | Windows | `installer/windows.iss` → `<app>-<version>-setup.exe` |
 | macOS | `<app>-<version>-macos.zip` |
-| Linux | `<app>-<version>-linux-x86_64.tar.gz` |
+| Linux | `<app>-<version>-x86_64.AppImage`, or `<app>-<version>-linux-x86_64.tar.gz` if the ADR chose a tarball |
 
 - `version` in `pyproject.toml` is the single source; installer, About dialog and artifact
   names read it. `--self-check` prints it.
@@ -273,8 +273,8 @@ Check these first when reviewing a change here.
    failure, not something to rerun; `sleep` is not the fix for a flaky one.
 8. "Tests pass, so the build works."
 9. Letting `pyside6-deploy` pip-install Nuitka; `import PySide6` at module top.
-10. Switching to PyInstaller to escape a Nuitka error — the three-strikes rule's MUST NOT
-    list covers switching to escape an error.
+10. Switching to PyInstaller to escape a Nuitka error. It is a local-iteration tool here;
+    releasing with it needs an ADR, and a build error is not that ADR.
 11. An adapter calling `platformdirs` on its own, defeating `--self-check` isolation.
 
 ---
