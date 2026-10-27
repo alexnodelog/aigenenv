@@ -21,8 +21,9 @@ holds one track, never both.
 - **Track B — FastAPI + Jinja2 + htmx.** Anything else: anonymous visitors, the app's own
   accounts, a designed UI, or pages that must be addressable by URL.
 
-Both tracks share every layer below the UI (§3), so moving from A to B rewrites `ui/` into
-`web/` and nothing else. That is the boundary's purpose. A move is recorded as an ADR.
+Both tracks share `domain/`, `services/` and `adapters/` (§3). Moving from A to B rewrites
+`ui/` into `web/` and replaces OIDC login with the app's own accounts (§4.4); the shared
+layers stay. A move is recorded as an ADR.
 
 A Track A tool used for work is hosted like Track B (§1 Hosting). Streamlit Community Cloud
 is for personal learning projects only.
@@ -42,7 +43,7 @@ is for personal learning projects only.
 | Styling — Track B | Tailwind CSS v4 via its standalone CLI; compiled CSS committed, never hand-edited | Plain CSS | A Node-based asset pipeline; the Tailwind Play CDN; v3-style `tailwind.config.js` |
 | Styling — Track A | Theme in `.streamlit/config.toml` | — | CSS or JS injected through `unsafe_allow_html` or a component to restyle the app |
 | Charts — Track A | Streamlit built-ins, Plotly | — | — |
-| Persistence | SQLite via SQLAlchemy 2.0 (`Mapped[]`), sync `Session` | PostgreSQL via SQLAlchemy + psycopg 3 — required when the host has no persistent disk (§4.3); async SQLAlchemy | SQLModel; any other ORM; string-built SQL |
+| Persistence | SQLite via SQLAlchemy 2.0 (`Mapped[]`), sync `Session` | PostgreSQL via SQLAlchemy + psycopg 3 — required when the host has no persistent disk (§4.3) | async SQLAlchemy; SQLModel; any other ORM; string-built SQL |
 | Migrations | Alembic, `render_as_batch=True` on SQLite | — | `create_all()` against a deployed DB; editing a shipped revision; hand-applied schema changes |
 | Schemas — Track B | Pydantic v2, separate from ORM models | — | ORM models passed to templates or returned from routes |
 | Config | Frozen dataclass built from `os.environ` in `config.py`; `.env` loaded in development by `uv run --env-file .env` | pydantic-settings | `python-dotenv` calls in application code; `os.environ` read anywhere but `config.py` |
@@ -112,8 +113,8 @@ Verify before the first build; `uv sync` does not install or reveal these.
   them, with the current user's identity, into each page as arguments. A page in `ui/`
   never constructs a service or reads `st.user` itself.
 - An app with no business rules MAY omit `domain/` and `services/`, and MUST NOT add them
-  to match this layout. A new top-level dir needs an ADR only if it changes the boundaries
-  below.
+  to match this layout. A new top-level dir needs an ADR only if it changes a row of the
+  import table below.
 
 | Directory | MAY import | MUST NOT import |
 |---|---|---|
@@ -172,8 +173,8 @@ Track B — one request, one thread from Uvicorn's pool.
   through `hx-push-url` — MUST render a full page when requested without that header.
 - Work that outlives the request does not run in the web process: a free-tier host stops
   it on spin-down without warning. `BackgroundTasks` is for effects whose loss is
-  acceptable, and nothing that costs money or writes to a third party (`GLOBAL_RULES.md`
-  repeated-operations rule).
+  acceptable, and nothing that costs money or writes to a third party (`GLOBAL_RULES.md` §11,
+  "Repeated and paid operations").
 
 ### 4.2 Paths
 
@@ -217,9 +218,11 @@ Track B — one request, one thread from Uvicorn's pool.
   Blocking step (`GLOBAL_RULES.md` §4) that names the `pg_dump` taken before it and checks
   that the dump restores into an empty database. Neon Free's 6-hour restore window is a
   second line of defence, not the backup.
-- An app holding durable data SHOULD take a backup on a schedule and keep it off the
-  database host — a dump stored only inside Neon, or a SQLite backup only on the same VM,
-  does not survive losing that host. The method is recorded in `DECISIONS.md`.
+- An app holding data its users cannot recreate MUST take a backup on a schedule and keep
+  it off the database host — a dump stored only inside Neon, or a SQLite backup only on the
+  same VM, does not survive losing that host. A restore from that backup into an empty
+  database MUST have succeeded once before the app holds real data. The schedule and method
+  are recorded in `DECISIONS.md`.
 - A database at a revision the code does not know → refuse to start, log why.
 - Shipped revisions are append-only. Fixes are new revisions.
 
@@ -243,7 +246,10 @@ Track B — one request, one thread from Uvicorn's pool.
   third-party credential — their API token, their mail password — needs an ADR naming how it
   is encrypted at rest and with which deployment key.
 - Track B sessions: a random session ID in a cookie with `HttpOnly`, `Secure` and
-  `SameSite=Lax`, the row server-side, rotated on login, deleted on logout. Behind the host's
+  `SameSite=Lax`, the row server-side, rotated on login, deleted on logout, expiring after
+  a stated idle time and a stated absolute time. Failed logins are rate-limited per account
+  and per client address, and a failed login says the same thing whether or not the account
+  exists. Behind the host's
   TLS proxy, Uvicorn MUST trust that proxy's forwarded headers (`--forwarded-allow-ips`, set
   per host), or `Secure` cookies and `url_for` produce `http://` links.
 - Track A: `st.login` establishes who the user is, not what they may do. The composition
@@ -289,7 +295,8 @@ docker build -t <app>:<version> .
   passes in `PORT`:
   - Track B: `uvicorn <app>.main:create_app --factory --forwarded-allow-ips <host proxy>`
   - Track A: `streamlit run src/<app>/streamlit_app.py --server.headless true`
-- Deploy a walking skeleton — one page, `/healthz`, the real host — in the first week.
+- A project that will be deployed deploys a walking skeleton — one page, the health
+  check, the real host — in the first week.
   Port, proxy, cold start and secrets surface there. Leaving the first real deploy until
   release is PROHIBITED.
 
@@ -319,7 +326,10 @@ stops the container, and exits 0 — or non-zero with the reason.
 - `version` in `pyproject.toml` is the single source; `/healthz`, the image tag and the Git
   tag read it. CI fails a tag that does not match.
 - Auto-deploy on push is off. CI triggers the host's deploy for the tagged commit after
-  every check passes (§5.5).
+  every check passes (§5.5) — except when the tag adds an Alembic revision since the
+  previous tag. CI then stops before deploying and the human deploys after the backup in
+  §4.3. Container start runs migrations, so this stop is what makes the migration a
+  Blocking step rather than a written intention.
 - Rollback is a redeploy of the previous tag. It is safe only if that version runs against
   the current schema; a migration that breaks this is stated before the deploy.
 - A free Render service sleeps after 15 minutes idle and takes about a minute to wake.
@@ -330,9 +340,12 @@ stops the container, and exits 0 — or non-zero with the reason.
 - Push / PR: `uv sync --locked`, Ruff, mypy, pytest (offline), boundary check,
   `alembic check` if the app persists data. A PostgreSQL project also runs the adapter tests
   and migrations against a PostgreSQL service container. Track B also regenerates the
-  stylesheet and fails on `git diff --exit-code`. Then build the image and run the smoke test.
-- Version tag: all of the above → trigger the deploy → confirm `/healthz` reports the tagged
-  version and `/` responds. Allow two minutes for a cold start before failing. On failure,
+  stylesheet and fails on `git diff --exit-code`. If the deploy artifact is the container
+  image, build it and run the smoke test; a project on the host's native runtime instead
+  starts the app with `uv run` and runs the same smoke checks against it.
+- Version tag: all of the above → trigger the deploy (unless §5.4 stops it) → confirm the
+  deployed version and that `/` responds. Track B reads the version from `/healthz`. Track A
+  has no endpoint for it, so the human confirms the deployed commit on the host's dashboard. Allow two minutes for a cold start before failing. On failure,
   stop and report; never redeploy or retry automatically.
 - Anything a person other than the developer uses comes from a tag that passed this job.
 
