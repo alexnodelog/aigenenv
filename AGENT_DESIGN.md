@@ -157,7 +157,7 @@ filled in.
 
 Body sections, in this order: **Role** (one paragraph) / **Inputs** / **Outputs** /
 **MUST NOT** / **Procedure** (role-specific steps; shared procedures by skill name only) /
-**Return** (the §5 shape) / **Source** (provenance line, see §8).
+**Return** (the §5 shape).
 
 | Choice | Status |
 |---|---|
@@ -188,38 +188,73 @@ that one file.
 
 ---
 
-## 8. Sources
+## 8. Behaviour each definition must carry
 
-Repositories inspected at the commits below. Both are MIT; a definition or skill that copies
-text from either MUST keep the copyright line and name the source and commit in its
-**Source** section.
+What makes each role work, stated as behaviour. Definitions and skills are written from this
+section, never by editing someone else's text.
 
-| Source | Commit |
+**planner**
+- Writes no code, and proposes no plan content before it has read `PRD.md` in full.
+- Slices work vertically: each task delivers one thin end-to-end behaviour that can be
+  verified on its own, not one layer of many features.
+- Each task states what blocks it, the files it may touch, the seams its tests use, and a
+  done condition a fresh session can check.
+- Asks nothing it can look up in the code. A question only the human can answer goes into
+  its return as `BLOCKED`.
+
+**builder**
+- One failing test, the least code that passes it, repeat. Never all tests first.
+- Tests go through the agreed seam and assert behaviour, never internals. An expected value
+  comes from the requirement or a worked example, never recomputed the way the code does.
+- No coverage target. Refactoring is outside the loop.
+- A bug starts with a test that fails for the stated reason; when the cause is unknown, it
+  follows `diagnose`.
+
+**reviewer**
+- Its job is to break the claim, not to confirm it. The builder's account is one of the
+  things under test, and the reviewer never receives it.
+- Reproduces the central claim by running it — a guard is verified by making it fire. Reading
+  alone never approves runtime behaviour.
+- Records the commit at start and end; if it moved, the verdict is `unverified`. Evidence
+  produced at another commit cannot support `approved`.
+- Never edits, formats, or fixes, inside or outside the reviewed tree; scratch work goes to a
+  temporary directory. `git status` is clean before it returns.
+- An error, timeout, missing tool, or unrun central check is `unverified`, never `approved`.
+  Any critical or high finding is `changes required`. There is no fourth verdict.
+- `check` mode runs the project's checks in order — type check, lint, build, test — and reads
+  the diff against the task. `adversarial` mode adds reproduction and counter-example search
+  in the order security, data integrity, correctness, performance.
+
+**discover**
+- One question at a time; facts it can look up are not asked.
+- Ends only when every open question is answered. Unanswered becomes out of scope, written
+  as such, never deferred silently.
+
+**diagnose**
+- Reproduce, narrow, form one hypothesis, test it. No fix before a failing test shows the
+  cause.
+- Escalation goes to the human after three failed attempts at one cause, never to another
+  agent with wider authority.
+
+**handoff**
+- Writes `state.md` with the next action first and the history after it.
+- Facts come from `git` and the files, not from what the session remembers.
+- Writes a minimal valid `state.md` before anything else, so a session that runs out of room
+  still leaves one.
+
+### Rejected patterns
+
+| Pattern | Why not |
 |---|---|
-| `sangrokjung/claude-forge` | `34d881dc9bdc669aadc3a1e8147a4bd5467ecbe3` (2026-09-03) |
-| `mattpocock/skills` | `5beb35b040e3de97e54fa9e386d7e42d15c295c2` (2026-10-19) |
-
-| Ours | Taken from | Rewritten because |
-|---|---|---|
-| `planner` | Forge `planner` (no code before approval); Matt `to-tickets` (vertical slices, blocking edges) | Forge's preloads Superpowers skills and returns the plan as a message; Matt's publishes to an issue tracker. Ours writes `PLAN.md` and adds seams per task |
-| `builder` | Forge `tdd-guide`; Matt `tdd` (seams, anti-patterns, one slice per cycle) | Forge's demands 80% coverage, which the testing rules forbid as a goal, and preloads Superpowers; Matt's confirms seams with the user mid-build, which a subagent cannot do |
-| `reviewer` | Forge `adversarial-reviewer` (near-verbatim invariants and protocol); Forge `verify-agent` (check order, recording the commit) | Verdict words changed to the ones `GLOBAL_RULES.md` uses; runs in its own worktree instead of the author's tree. `verify-agent`'s auto-fix and `git stash` checkpoint are dropped — a verifier that edits is no longer independent, and it stashes in the author's tree |
-| `discover` | Matt `grill-me` / `grilling`; Matt `to-spec` | Output fixed to `PRD.md`; open questions must be answered, not listed |
-| `diagnose` | Matt `diagnosing-bugs`; Forge `systematic-debugger` | Forge's escalation chain (`rca-debugger`, `escalation-fixer`) contradicts three strikes: escalation goes to the human |
-| `handoff` | Forge `relay` (skeleton first, facts from git not memory, next task first); Matt `handoff` | No `/compact`: the session closes. Target is `state.md`, not a temp file |
-| `orchestrate` | — | No suitable source inspected |
-
-### Not adopted
-
-| Item | Reason |
-|---|---|
-| Any plugin or full install (Forge, Superpowers, Matt's plugin) | Context occupied at session start |
-| Forge's other agents (`architect`, `code-reviewer`, `security-reviewer`, `rca-debugger`, `escalation-fixer`, …) | No role in the flow that the three subagents do not already cover |
-| Matt `triage` | Moves issues through an issue tracker; this flow has none |
-| Matt `improve-codebase-architecture` | Not a phase. Reconsider as a skill if a concrete need appears |
-| Matt `git-guardrails-claude-code` | A hook, not an agent. Belongs with the guards in step 3 |
-| Matt `zoom-out` | Removed upstream |
-| Agent teams / agents messaging each other | Bypasses files as the only interface |
+| Installing a ready-made bundle of agents, skills, or hooks | It occupies context at every session start, and its parts assume each other |
+| A definition that preloads skills | The same cost, paid on every spawn |
+| A verifier that fixes simple errors itself | It is then the author of what it approves |
+| A checkpoint stash in the author's working tree | Touches work the agent did not create |
+| An escalation chain of increasingly powerful agents | Three failures mean the model of the problem is wrong; a stronger agent repeats it faster |
+| A coverage percentage as a done condition | Met by tests that assert nothing |
+| Work tracked in an external issue tracker | Files in the repository are the only interface |
+| Agents that message each other | Same reason |
+| Compressing a session to continue it | The session closes; `state.md` carries what matters |
 
 ---
 
