@@ -221,8 +221,9 @@ Track B — one request, one thread from Uvicorn's pool.
 - An app holding data its users cannot recreate MUST take a backup on a schedule and keep
   it off the database host — a dump stored only inside Neon, or a SQLite backup only on the
   same VM, does not survive losing that host. A restore from that backup into an empty
-  database MUST have succeeded once before the app holds real data. The schedule and method
-  are recorded in `DECISIONS.md`.
+  database MUST have succeeded once before the app holds real data. A failed backup run
+  MUST reach the developer — a scheduled CI job that fails, not a log line nobody reads. The
+  schedule and method are recorded in `DECISIONS.md`.
 - A database at a revision the code does not know → refuse to start, log why.
 - Shipped revisions are append-only. Fixes are new revisions.
 
@@ -238,13 +239,14 @@ Track B — one request, one thread from Uvicorn's pool.
   documented by `secrets.toml.example`, and supplied by the host as a secret file.
 - Accounts live in the app's own users table, so they move with the database. A vendor's
   auth service MUST NOT hold them.
-- There is no OS credential store on a server. End-user passwords are stored only as
-  Argon2 hashes, never logged, never placed in session state.
-- No mail provider is selected. A feature that sends mail — password reset, address
-  verification, notifications — needs an ADR naming the provider and its free-tier terms
-  before it is built. Until then, a password reset is done by an administrator. Storing an end user's own
+- This archetype names no credential store: a server has no OS credential store. A login
+  password is only ever verified, never read back, so the app stores only its Argon2 hash —
+  never logged, never placed in session state. Storing an end user's own
   third-party credential — their API token, their mail password — needs an ADR naming how it
   is encrypted at rest and with which deployment key.
+- No mail provider is selected. A feature that sends mail — password reset, address
+  verification, notifications — needs an ADR naming the provider and its free-tier terms
+  before it is built. Until then, a password reset is done by an administrator.
 - Track B sessions: a random session ID in a cookie with `HttpOnly`, `Secure` and
   `SameSite=Lax`, the row server-side, rotated on login, deleted on logout, expiring after
   a stated idle time and a stated absolute time. Failed logins are rate-limited per account
@@ -285,6 +287,7 @@ Track B — one request, one thread from Uvicorn's pool.
 # Track B only — regenerate the committed stylesheet
 tailwindcss -i assets/app.css -o src/<app>/web/static/app.css --minify
 
+# Container deploys only (§1 Deploy artifact)
 docker build -t <app>:<version> .
 ```
 
@@ -296,9 +299,8 @@ docker build -t <app>:<version> .
   - Track B: `uvicorn <app>.main:create_app --factory --forwarded-allow-ips <host proxy>`
   - Track A: `streamlit run src/<app>/streamlit_app.py --server.headless true`
 - A project that will be deployed deploys a walking skeleton — one page, the health
-  check, the real host — in the first week.
-  Port, proxy, cold start and secrets surface there. Leaving the first real deploy until
-  release is PROHIBITED.
+  check, the real host — before any feature beyond it is built. Port, proxy, cold start and
+  secrets surface there. Leaving the first real deploy until release is PROHIBITED.
 
 ### 5.3 Self-check
 
