@@ -12,7 +12,9 @@ An agent definition adds role-specific behaviour; it never relaxes a rule.
 **Precondition.** This design conflicts with the current `GLOBAL_RULES.md` until the changes
 in §9 are made there. No file derived from this document is deployed before those changes
 are made, every skill an agent definition names exists, the way `CLAUDE.md` brings the
-rules into a subagent has been verified on the installed CLI, and the human has confirmed
+rules into a subagent has been verified on the installed CLI, whether a subagent with no
+`skills:` field can invoke a skill has been verified on the installed CLI, and the human has
+confirmed
 that the machine agents run on holds no production credentials (§3).
 
 ---
@@ -215,8 +217,8 @@ One writer per file at any moment. This is what makes parallel builders mergeabl
 
 | File | Writer | Notes |
 |---|---|---|
-| `PRD.md` | `discover` session | Committed when approved |
-| `PLAN.md` | `planner` | Each task names: its requirement, what blocks it, file scope, seams under test, done condition, `parallel: yes/no`. The planner has no `Bash`; the orchestrator commits the file once approved |
+| `PRD.md` | `discover` session | Committed before the human is asked to approve it |
+| `PLAN.md` | `planner` | Each task names: its requirement, what blocks it, file scope, seams under test, done condition, `parallel: yes/no`. The planner has no `Bash`; the orchestrator commits the file before asking the human to approve it |
 | Code, tests | `builder`, on `task/<id>` only | |
 | `DECISIONS.md`, `README.md`, `.env.example` | `builder`, in the commit that caused the change | |
 | `state.md` | `orchestrate`; when no orchestrator is running, the single session that is — including the `discover` session recording the PRD approval | Committed only on the branch tasks merge into, at every transition. Task branches never change it |
@@ -374,6 +376,8 @@ section, never by editing someone else's text.
 - Returns `DONE` only with every change committed and the worktree clean.
 - A bug starts with a test that fails for the stated reason; when the cause is unknown, it
   follows `diagnose`.
+- A change that makes a decision needing a record adds it to `DECISIONS.md` in the same
+  commit, following `adr`.
 
 **reviewer**
 - Its job is to break the claim, not to confirm it. The builder's account is one of the
@@ -446,5 +450,5 @@ because that is the only way subagents receive them. The import mechanism is not
 verified.
 
 Skills to draft (step 7): `orchestrate`, `discover`, `handoff` (including the `state.md`
-template), `diagnose`. An agent definition that names a skill is not deployed until that
+template), `diagnose`, `adr`, `lockfile-conflict`. An agent definition that names a skill is not deployed until that
 skill exists.
