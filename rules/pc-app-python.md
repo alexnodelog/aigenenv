@@ -2,10 +2,10 @@
 
 Desktop app, Python only, Qt UI, single user, local data.
 
-`GLOBAL_RULES.md` → this file → `CLAUDE.md` → current task. Only what differs, narrows, or
-adds. RFC 2119 keywords. **Default** = use it; **Alternative** = allowed with an ADR;
-**Prohibited** = MUST NOT. The §1 table's Prohibited column covers technology choices only;
-every other prohibition is a MUST NOT where the rule it belongs to lives.
+`GLOBAL_RULES.md` → this file → `CLAUDE.md` → current task. This file holds only what
+differs from, narrows, or adds to `GLOBAL_RULES.md`. **Default** = use it; **Alternative** =
+allowed with an ADR; **Prohibited** = MUST NOT. The §1 Prohibited column covers technology
+choices only; every other prohibition sits with the rule it belongs to.
 
 Wrong archetype if the UI is HTML (`pc-app-electron`), if two people share the data (a web
 archetype), or if there is no window (a script).
@@ -23,8 +23,8 @@ archetype), or if there is no window (a script).
 | Persistence | SQLite via SQLAlchemy 2.0 (`Mapped[]`) | stdlib `sqlite3` for 1–2 tables | QtSql, pickle, shelve |
 | Migrations | Ordered functions on `PRAGMA user_version` (§4.3) | — | `create_all()` on an existing DB; editing a shipped migration |
 | Paths | `platformdirs` | — | Paths beside the executable or relative to cwd; writing into the install dir at runtime |
-| Settings | TOML in `user_config_dir`, read at startup only | JSON — required if the app writes settings back, since `tomllib` cannot write; record the ADR | INI, pickle, `QSettings` |
-| User credentials | `keyring` (OS credential store), declared as a runtime dependency | — | Credentials in the settings file, the DB, or a log line |
+| Settings | TOML in `user_config_dir`, read at startup only | JSON, only if the app writes settings back | INI, pickle, `QSettings` |
+| User credentials | `keyring`, declared as a runtime dependency | — | Credentials in the settings file, the DB, or a log line |
 | Background work | `QThread` + worker `QObject` | `concurrent.futures`, results by signal | Blocking the GUI thread; touching widgets off it; killing a running `QThread` |
 | Lint / format | Ruff | — | Black + isort + flake8 |
 | Type check | mypy strict on `domain/`, `application/` | pyright | — |
@@ -32,21 +32,21 @@ archetype), or if there is no window (a script).
 | Build | `pyside6-deploy`, `mode = standalone` | PyInstaller for local iteration | `onefile` for distribution; cx_Freeze, py2exe, Briefcase; distributing a dev-machine build |
 | Windows package | Inno Setup | — | — |
 | macOS package | `.app` from `pyside6-deploy` | — | — |
-| Linux package | AppImage, built from the standalone dir with `appimagetool` (MIT) | `.tar.gz` of the standalone dir — record the ADR | — |
+| Linux package | AppImage via `appimagetool` | `.tar.gz` of the standalone dir | — |
 
 ---
 
 ## 2. Prerequisites
 
-Verify before the first build; `uv sync` does not install or reveal these.
+`uv sync` neither installs nor reveals these. Setup: skill `pyside-release`.
 
 | Item | Scope |
 |---|---|
-| C compiler | System. Windows: VS Build Tools (C++), MSVC on `PATH` via `vcvarsall.bat`. macOS: Xcode CLT. Linux: gcc/clang + ccache |
-| nuitka, ordered-set, zstandard, patchelf (Linux) | Project `build` dependency group, locked (§5.1) |
-| Inno Setup (`iscc` on `PATH`) | System, Windows only |
-| `appimagetool` | System, Linux only; skip if the ADR chose `.tar.gz`. Pin a tagged release, never `continuous`, and record the version and SHA-256 in `DECISIONS.md` |
-| `libxcb-cursor0`, `libxkbcommon-x11-0`, `libegl1`, `libgl1` | System, Linux only. Qt 6.5+ will not start without `libxcb-cursor0` |
+| C compiler | System. Windows: VS Build Tools (C++). macOS: Xcode CLT. Linux: gcc or clang |
+| Nuitka and its helpers | Project `build` dependency group, locked (§5.1) |
+| Inno Setup (`iscc`) | System, Windows only |
+| `appimagetool` | System, Linux only, unless the ADR chose `.tar.gz`. A tagged release, never `continuous`; version and SHA-256 recorded in `DECISIONS.md` |
+| Qt system libraries: `libxcb-cursor0`, `libxkbcommon-x11-0`, `libegl1`, `libgl1` | System, Linux only |
 
 ---
 
@@ -68,6 +68,7 @@ Verify before the first build; `uv sync` does not install or reveal these.
 │   │   └── workers/
 │   └── resources/          icons, licence texts
 ├── installer/windows.iss
+├── scripts/package.py
 ├── tests/                  conftest.py, test_boundaries.py, domain/, application/, adapters/, ui/
 └── dist/                   gitignored
 ```
@@ -90,7 +91,7 @@ Verify before the first build; `uv sync` does not install or reveal these.
 - A slot calls one use case and renders the result. A decision about *what the application
   does*, taken inside a slot, is a defect.
 - `tests/test_boundaries.py` walks the imports of `domain/` and `application/` and fails on
-  `PySide6` or `sqlalchemy`. That test is the boundary check the CI job and the DoD mean.
+  `PySide6` or `sqlalchemy`. That test is the boundary check CI and §8 refer to.
 
 ---
 
@@ -103,16 +104,14 @@ Verify before the first build; `uv sync` does not install or reveal these.
 - Pattern: `QThread` + worker `QObject`, `moveToThread`, start from `thread.started`,
   `finished` → `thread.quit` → `deleteLater`. Hold a reference to both until `finished`.
 - Every blocking call inside a worker — socket, subprocess, lock, queue — takes its own
-  timeout, so the worker always terminates. A worker that cannot guarantee that MUST NOT
-  be written: the app would become unclosable, since a running `QThread` MUST NOT be killed
-  or destroyed — that takes the process down.
+  timeout. A worker that cannot guarantee it terminates MUST NOT be written; a running
+  `QThread` MUST NOT be killed or destroyed.
 - On close, signal workers to stop and wait with a timeout. If it expires, the close is
   **cancelled**: ignore the close event, keep the window alive, tell the user the app is
   finishing, close for real when the last worker reports `finished`.
 - A single file write replaces the target atomically: temp file on the **same filesystem**,
   then rename, original left intact if the rename fails. A single DB write is one
-  transaction. Work spanning both MUST define its own recovery order — neither mechanism
-  makes a cross-store operation atomic.
+  transaction. Work spanning both MUST define its own recovery order.
 - `processEvents()` loops and `time.sleep()` on the GUI thread are PROHIBITED.
 
 ### 4.2 Paths
@@ -120,7 +119,7 @@ Verify before the first build; `uv sync` does not install or reveal these.
 - `main.py` is the only caller of `platformdirs`. It resolves `user_data_dir`,
   `user_config_dir` and `user_log_dir`, creates them if missing, and passes them to the
   adapters as one frozen `Paths` dataclass. An adapter that resolves its own path cannot be
-  redirected, which is what `--self-check` depends on.
+  redirected, and `--self-check` (§5.3) depends on redirecting it.
 - The install directory is read-only at runtime.
 - Bundled resources are located relative to the package (`importlib.resources`), never cwd.
 
@@ -130,13 +129,11 @@ Verify before the first build; `uv sync` does not install or reveal these.
   worker opens and closes its own.
 - `PRAGMA foreign_keys=ON` and a non-zero `busy_timeout` on every connection. A write that
   still hits `SQLITE_BUSY` fails as an error; it MUST NOT be retried by re-running the use
-  case, which would duplicate work.
-- `adapters/migrations.py` holds an ordered list; startup applies each migration above the
-  stored `user_version`, with the version write in the **same** transaction, so a crash
-  cannot leave the version and the schema disagreeing.
+  case.
+- Each migration and its `user_version` write run in the **same** transaction.
 - Before migrating an existing file, back it up beside the DB with
-  `sqlite3.Connection.backup`, not a file copy — in WAL mode the `.db` file alone is not a
-  consistent snapshot. Verify the backup opens and reports the old version first.
+  `sqlite3.Connection.backup`; a file copy is PROHIBITED. Verify the backup opens and
+  reports the old version before migrating.
 - A failed migration: roll back, keep original and backup, do not advance `user_version`,
   refuse to open, and offer the user a way to open the backup's folder.
 - `user_version` higher than the app supports → refuse to open, tell the user to update.
@@ -144,49 +141,40 @@ Verify before the first build; `uv sync` does not install or reveal these.
 
 ### 4.4 Settings, credentials, errors
 
-- Settings: typed dataclass, read once at startup, passed explicitly. The file is external
-  input — wrong types and values outside the bounds declared on the dataclass take defaults
-  with a logged warning, as do unknown and missing keys.
+- Settings: typed dataclass, read once at startup, passed explicitly. Wrong types, values
+  outside the bounds declared on the dataclass, and unknown or missing keys take defaults
+  with a logged warning.
 - A malformed file is renamed aside (never deleted) and replaced. If the rename or write
-  fails, run on in-memory defaults and tell the user settings cannot be saved. The app MUST
-  start either way.
-- The OS credential store for this archetype is `keyring`. A desktop app has no deployment
-  secrets, so it ships no `.env.example`; every secret it holds is an end-user credential
-  under the global rule.
+  fails, the app runs on in-memory defaults and tells the user settings cannot be saved. The
+  app MUST start either way.
+- A desktop app has no deployment secrets and ships no `.env.example`. Every secret it holds
+  is an end-user credential and goes to `keyring`.
 - Released builds have no console: log to a rotating file in `user_log_dir`.
-- `main.py` installs `sys.excepthook` before the window opens: log the traceback, show the
-  user a plain message of what failed and what to do. The dialog MUST NOT contain the
-  traceback, SQL, internal identifiers, or a file path — it offers a control that opens the
-  log directory instead.
-- A failed slot MUST leave no partial write in the DB or on disk. The window MAY be left
-  showing stale data as long as the user is told the action failed.
+- `main.py` installs `sys.excepthook` before the window opens. It logs the traceback and
+  shows the user what failed and what to do, with a control that opens the log directory.
+- A failed slot MUST leave no partial write in the DB or on disk. The window MAY show stale
+  data as long as the user is told the action failed.
 
 ---
 
 ## 5. Build and package
 
+Commands, per-OS steps and CI job setup: skill `pyside-release`.
+
 ### 5.1 Lock the toolchain
 
-`pyside6-deploy` otherwise pip-installs Nuitka at build time, which fails under uv or
-escapes `uv.lock`.
-
-- Declare nuitka and its helpers in a `build` group; add `pip` there if `pyside6-deploy`
-  still needs it importable. The version in `pysidedeploy.spec` MUST match `uv.lock`.
+- Nuitka and its helpers are declared in a locked `build` dependency group.
+  `pyside6-deploy` MUST NOT install packages at build time. The Nuitka version in
+  `pysidedeploy.spec` MUST match `uv.lock`.
 - `[tool.uv] required-environments` MUST list every declared target OS.
 
 ### 5.2 Build
 
-```
-uv sync --locked --group build
-uv run pyside6-deploy -c src/<app>/pysidedeploy.spec -f
-```
-
-- Import as `from PySide6.QtWidgets import ...`. A bare `import PySide6` breaks module
-  detection and the build ships the wrong Qt libraries.
-- `--dry-run` prints the Nuitka command without building.
+- PySide6 is imported by submodule (`from PySide6.QtWidgets import ...`). A bare
+  `import PySide6` is PROHIBITED: the build ships the wrong Qt libraries.
 - **Declared target OSes** are the ones `README.md` lists under its install section. That
-  list is the single source: `[tool.uv] required-environments`, the first-week builds, and
-  the CI matrix all follow it, and adding or dropping an OS means editing it there first.
+  list is the single source for `required-environments`, the first-week builds, and the CI
+  matrix; adding or dropping an OS means editing it there first.
 - Build once on every declared target OS in the first week, as a walking skeleton — on CI
   where the developer has no such machine. Leaving the first cross-platform build until
   release is PROHIBITED.
@@ -196,38 +184,29 @@ uv run pyside6-deploy -c src/<app>/pysidedeploy.spec -f
 `main.py --self-check` starts the app, applies all migrations, runs the event loop until the
 window reports ready, closes it, exits 0 — or non-zero with the reason.
 
-- It MUST NOT touch the user's environment: `--self-check` builds the `Paths` of §4.2 from
+- It MUST NOT touch the user's environment: it builds the `Paths` of §4.2 from
   subdirectories of one temp dir and disables credential-store access. A test asserts that
   a `--self-check` run creates nothing under the real directories.
 - Timeouts: ready within 30 s, shutdown within 10 s, whole run within 60 s. A timeout
   exits non-zero.
+- It prints the app version.
 
 ### 5.4 Package
 
-| OS | Output |
-|---|---|
-| Windows | `installer/windows.iss` → `<app>-<version>-setup.exe` |
-| macOS | `<app>-<version>-macos.zip` |
-| Linux | `<app>-<version>-x86_64.AppImage`, or `<app>-<version>-linux-x86_64.tar.gz` if the ADR chose a tarball |
-
-- Each row is produced by `scripts/package.py`, run after the build on that OS: it calls
-  `iscc`, zips the `.app`, or hands the standalone dir to `appimagetool`, and names the
-  output as above. CI's `package` step is that script, not a set of inline commands.
+- Packaging is done only by `scripts/package.py`, run after the build on each OS. CI's
+  package step calls that script; inline packaging commands are PROHIBITED.
 - `version` in `pyproject.toml` is the single source; installer, About dialog and artifact
-  names read it. `--self-check` prints it.
-- Per-user install by default. No user data in the install directory. Uninstall MUST NOT
-  delete the data directory without asking.
-- Builds are unsigned: SmartScreen and Gatekeeper will warn. Document it for users.
+  names read it.
+- Per-user install by default. Uninstall MUST NOT delete the data directory without asking.
+- Builds are unsigned. `README.md` tells users to expect SmartScreen and Gatekeeper
+  warnings.
 
 ### 5.5 CI
 
-- Push / PR, Linux: `uv sync --locked`, Ruff, mypy, pytest (offscreen), boundary check.
-  Install the §2 Linux Qt libraries in the job.
-- Version tag, one job per declared target OS: test → build → `--self-check` → package →
-  attach to the Release. Publish only if every declared OS succeeds. Verify the compiler,
-  and `iscc` on Windows, before building.
-- The matrix runs on tags only. Local builds are for the developer's own machine; anything
-  handed to another person comes from a tag and passes `--self-check` on its own OS.
+- Push / PR: one Linux job — `uv sync --locked`, Ruff, mypy, pytest offscreen including the
+  boundary check.
+- Version tag: one job per declared target OS — test, build, `--self-check`, package. The
+  release is published only if every OS job succeeds.
 
 ---
 
@@ -243,26 +222,14 @@ window reports ready, closes it, exits 0 — or non-zero with the reason.
 Most tests are in the first two rows. A UI test proves a click reaches the right use case
 and the result is displayed — not the rule itself.
 
-```toml
-[tool.pytest.ini_options]
-qt_api = "pyside6"
-markers = ["integration: needs network or an external system"]
-addopts = "-m 'not integration'"
-```
-
-```python
-# tests/conftest.py — before any QApplication exists
-import os
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-```
-
+- pytest-qt runs with `qt_api = "pyside6"`, and `QT_QPA_PLATFORM=offscreen` is set before
+  any `QApplication` exists.
 - Every widget created in a test gets `qtbot.addWidget`. Tests never create their own
   `QApplication`.
 - Wait with `qtbot.waitSignal`, `waitSignals`, or `waitUntil`, always with a timeout.
   `time.sleep()` and `qtbot.wait(ms)` to "let things settle" are PROHIBITED.
 - Assert what the user sees: text, enabled state, row count, visibility.
-- Every `QMessageBox` / `QFileDialog` static call a test reaches MUST be monkeypatched; an
-  unpatched modal dialog hangs the suite.
+- Every `QMessageBox` / `QFileDialog` static call a test reaches MUST be monkeypatched.
 - Worker logic is tested as a plain function on the test thread; only the signal wiring is
   tested across threads.
 - Qt warnings captured during a test are investigated, not ignored.
@@ -271,22 +238,20 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 ## 7. Where agents go wrong
 
-Check these first when reviewing a change here.
+The mistakes agents most often make here. Each breaks the rule in the section named.
 
 1. PyQt idioms in PySide6: `pyqtSignal`, `pyqtSlot`, `exec_()`, short-form enums. PySide6
    uses `Signal`, `Slot`, `exec()`, `Qt.AlignmentFlag.AlignLeft`.
-2. Blocking work inside a slot; widgets updated from a worker instead of by signal.
-3. `QThread` held in a local variable, collected while running.
-4. Validation and decisions written in `ui/` because that is where the button is.
-5. One `Session` shared across threads.
-6. `QSettings` or a settings file beside the executable.
-7. Unpatched modal dialog, or `waitSignal` without a timeout → hung test. A hung test is a
-   failure, not something to rerun; `sleep` is not the fix for a flaky one.
-8. "Tests pass, so the build works."
-9. Letting `pyside6-deploy` pip-install Nuitka; `import PySide6` at module top.
-10. Switching to PyInstaller to escape a Nuitka error. It is a local-iteration tool here;
-    releasing with it needs an ADR, and a build error is not that ADR.
-11. An adapter calling `platformdirs` on its own, defeating `--self-check` isolation.
+2. Blocking work inside a slot; widgets updated from a worker instead of by signal (§4.1).
+3. `QThread` held in a local variable, collected while running (§4.1).
+4. Validation and decisions written in `ui/` because that is where the button is (§3).
+5. One `Session` shared across threads (§4.3).
+6. `QSettings` or a settings file beside the executable (§1).
+7. A hung test — unpatched modal, untimed wait — rerun instead of fixed (§6).
+8. Letting `pyside6-deploy` install Nuitka; `import PySide6` at module top (§5.1, §5.2).
+9. Switching to PyInstaller to escape a Nuitka error. A build error is not grounds for the
+   Alternative's ADR.
+10. An adapter calling `platformdirs` on its own (§4.2).
 
 ---
 
