@@ -84,15 +84,13 @@ phase's file exists and the human has approved it.
 | **Build** | Code + tests | Each task passes §13 |
 | **Verify** | Review verdict | §5.3 is satisfied |
 
-**Approval is explicit.** It is the human saying so in the session, or an `Approved:
-<date>` line at the top of the phase file. Silence is not approval, and neither is the
-absence of objection. An agent that cannot find either MUST ask. When the human instructs
-the agent to skip a phase, that instruction is the approval, and it is recorded in
-`state.md`.
+**Approval is explicit.** It is the human saying so in the session. Silence is not
+approval, and neither is the absence of objection. When the human instructs the agent to
+skip a phase, that instruction is the approval.
 
-In an orchestrated run the human approves in the orchestrator's session. The orchestrator
-records the approval in `state.md` with the commit of the approved file, and does not write
-`Approved:` into the phase file.
+Every approval is recorded in `state.md` with the path and commit of the approved file. No
+agent writes `Approved:` into a phase file. An agent that finds no record, or finds the file
+changed since the recorded commit, MUST ask.
 
 Phase violations, all PROHIBITED:
 
