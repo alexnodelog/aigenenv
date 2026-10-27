@@ -71,7 +71,7 @@ human ──▶ [discover session] ──▶ PRD.md ──▶ human approves
           ▼
 [orchestrate] ──spawn──▶ planner ──▶ PLAN.md ──▶ human approves
      │
-     ├─ per task, in PLAN.md order (parallel only where §5.9 allows):
+     ├─ per task, in PLAN.md order (parallel only for tasks marked parallel: yes):
      │     create worktree + branch task/<id>
      │     spawn builder ──▶ commits on task/<id>, returns status
      │     record status in state.md
@@ -84,6 +84,16 @@ human ──▶ [discover session] ──▶ PRD.md ──▶ human approves
      │
      └─ BLOCKED / STRUCK_OUT from any subagent → ask the human, record the answer, respawn
 ```
+
+**One task, one human checkpoint.** Every task ends with a reviewer verdict and the human
+merging its branch. The next task that depends on it starts only after that merge.
+
+**Sequential or parallel.** Tasks run one at a time by default. Two tasks MAY run at the same
+time only when `PLAN.md` marks both `parallel: yes`, which the planner may do only when
+neither blocks the other and their file scopes do not overlap. The human approves this with
+the plan; the orchestrator never decides it on its own. Both modes use the same procedure —
+a worktree and a `task/<id>` branch per task — so switching between them changes nothing
+else.
 
 **Reviewer mode.** `adversarial` when the task is in the Always-Standard list or changes a
 public interface; `check` for every other Standard task. The orchestrator states the mode
@@ -106,7 +116,7 @@ One writer per file at any moment. This is what makes parallel builders mergeabl
 | File | Writer | Notes |
 |---|---|---|
 | `PRD.md` | `discover` session | Committed when approved |
-| `PLAN.md` | `planner` | Each task names: its requirement, file scope, seams under test, done condition. The planner has no `Bash`; the orchestrator commits the file once approved |
+| `PLAN.md` | `planner` | Each task names: its requirement, what blocks it, file scope, seams under test, done condition, `parallel: yes/no`. The planner has no `Bash`; the orchestrator commits the file once approved |
 | Code, tests | `builder`, on `task/<id>` only | |
 | `DECISIONS.md`, `README.md`, `.env.example` | `builder`, in the commit that caused the change | |
 | `state.md` | `orchestrate`; a single session when there is no orchestrator | Committed by the orchestrator on the branch its checkout is on |
