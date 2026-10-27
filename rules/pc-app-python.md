@@ -22,7 +22,7 @@ archetype), or if there is no window (a script).
 | Persistence | SQLite via SQLAlchemy 2.0 (`Mapped[]`) | stdlib `sqlite3` for 1–2 tables | QtSql, pickle, shelve |
 | Migrations | Ordered functions on `PRAGMA user_version` (§4.3) | — | `create_all()` on an existing DB |
 | Paths | `platformdirs` | — | Paths beside the executable or relative to cwd |
-| Settings | TOML in `user_config_dir` | JSON | INI, pickle, `QSettings` |
+| Settings | JSON in `user_config_dir` | TOML, read-only (`tomllib` cannot write) | INI, pickle, `QSettings` |
 | Background work | `QThread` + worker `QObject` | `concurrent.futures`, results by signal | Blocking the GUI thread |
 | Lint / format | Ruff | — | Black + isort + flake8 |
 | Type check | mypy strict on `domain/`, `application/` | pyright | — |
@@ -73,7 +73,8 @@ Verify before the first build; `uv sync` does not reveal them.
 - `.venv/` and `dist/` MUST stay outside `src/<app>/`: `pyside6-deploy` packages everything
   under the entry file's directory.
 - An app with no business rules MAY omit `domain/` and `application/`, and MUST NOT add
-  them to match this layout. New top-level dirs under `src/<app>/` need an ADR.
+  them to match this layout. A new top-level dir under `src/<app>/` needs an ADR only if it
+  changes the import boundaries below.
 
 | Directory | MAY import | MUST NOT import |
 |---|---|---|
@@ -98,7 +99,11 @@ Verify before the first build; `uv sync` does not reveal them.
 - Pattern: `QThread` + worker `QObject`, `moveToThread`, start from `thread.started`,
   `finished` → `thread.quit` → `deleteLater`. Hold a reference to thread and worker until
   `finished`.
-- On close, stop running workers and wait on the threads before exiting.
+- On close, signal workers to stop and wait with a timeout. Workers that do not return
+  MUST be waited on, not killed: a `QThread` destroyed while running takes the process
+  down. If the timeout expires, log it and tell the user the app is still finishing.
+- Work that writes files or rows MUST be cancellable at a point that leaves no partial
+  result: write to a temp file and rename, or wrap the write in a transaction.
 - `processEvents()` loops and `time.sleep()` on the GUI thread are PROHIBITED.
 
 ### 4.2 Paths
@@ -112,23 +117,33 @@ Verify before the first build; `uv sync` does not reveal them.
 
 - One `Engine` per process, created in `main.py`. A `Session` MUST NOT cross threads; each
   worker opens and closes its own.
-- `PRAGMA foreign_keys=ON` on every connection.
+- `PRAGMA foreign_keys=ON` and a non-zero `busy_timeout` on every connection. A write that
+  still hits `SQLITE_BUSY` surfaces as an error; it MUST NOT be retried by re-running the
+  use case, which would duplicate work.
 - `adapters/migrations.py` holds an ordered list; startup applies each migration above the
-  stored `user_version`, one transaction each, then writes the new version.
-- Before migrating an existing file, copy the DB to a timestamped backup beside it.
+  stored `user_version`. Each migration and the `user_version` write go in the **same**
+  transaction, so a crash cannot leave the version and the schema disagreeing.
+- Before migrating an existing file, take a timestamped backup beside it with the SQLite
+  backup API (`sqlite3.Connection.backup`), not a file copy — in WAL mode the `.db` file
+  alone is not a consistent snapshot. Verify the backup opens and reports the old
+  `user_version` before the first migration runs.
+- A migration that fails: roll back, keep the original and the backup, do not advance
+  `user_version`, and refuse to open the app with an error naming the backup path.
 - `user_version` higher than the app supports → refuse to open, tell the user to update.
 - Shipped migrations are append-only. Fixes are new migrations.
 
 ### 4.4 Settings and errors
 
 - Settings: typed dataclass, read once at startup, passed explicitly. Unknown keys logged
-  and ignored, missing keys defaulted, a malformed file renamed aside and replaced. The app
-  MUST start with a broken settings file.
-- `tomllib` cannot write. Writing TOML needs a dependency (Blocking) and an ADR; otherwise
-  use JSON.
+  and ignored, missing keys defaulted, a malformed file renamed aside (never deleted) and
+  replaced. The app MUST start with a broken settings file.
+- Tokens, passwords and API keys go in the OS credential store (`keyring`), never in the
+  settings file, the database, or a log line.
 - Released builds have no console: log to a rotating file in `user_log_dir`.
 - `main.py` installs `sys.excepthook` before the window opens: log the traceback, show the
-  user a plain message plus the log path. A slot that fails MUST leave state unchanged.
+  user a plain message plus the log path. A failed slot MUST leave no partial write in the
+  database or on disk; the window may be left showing stale data as long as the user is
+  told the action failed.
 
 ---
 
@@ -160,7 +175,8 @@ uv run pyside6-deploy -c src/<app>/pysidedeploy.spec -f
 ### 5.3 Self-check
 
 `main.py --self-check` starts the app, opens a DB in a temp dir, applies all migrations,
-constructs the main window, closes it, exits 0 — or non-zero with the reason. Every build
+constructs the main window, processes events once, closes it, exits 0 — or non-zero with
+the reason. It MUST NOT read or write the real `user_data_dir`. Every build
 handed to anyone MUST pass it on its own OS. Passing tests are not evidence that the
 artifact starts.
 
@@ -182,10 +198,11 @@ artifact starts.
 
 - Push / PR, Linux: `uv sync --locked`, Ruff, mypy, pytest (offscreen), boundary check.
   Install the §2 Linux Qt libraries in the job.
-- Version tag, Windows + macOS + Linux matrix: test → build → `--self-check` → package →
-  attach to the Release. Publish only if all three succeed. Verify compiler and `iscc`
-  before building.
-- The three-OS matrix runs on tags only.
+- Version tag, one job per **declared target OS** (`README` names them): test → build →
+  `--self-check` → package → attach to the Release. Publish only if every declared OS
+  succeeds. Verify compiler and `iscc` before building.
+- The matrix runs on tags only. Local builds are for the developer's own machine; anything
+  handed to another person comes from a tag.
 
 ---
 
@@ -232,14 +249,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 Beyond the Prohibited column in §1:
 
 - Importing `PyQt5` / `PyQt6` anywhere, including tests and scripts.
-- QtWebEngine as the application UI.
-- PySide6 or SQLAlchemy in `domain/` or `application/`.
 - Touching widgets from a non-GUI thread.
-- `processEvents()` loops or `time.sleep()` on the GUI thread.
 - Writing into the install directory or cwd at runtime.
-- `onefile` for a distributed build; distributing an artifact built on a dev machine.
+- Distributing an artifact built on a dev machine.
 - Hand-editing generated `ui_*.py`; editing a shipped migration.
-- Opening a DB whose `user_version` exceeds what the app supports.
+- Killing a running `QThread` to make the app exit.
 
 ---
 
@@ -271,14 +285,14 @@ Check these first when reviewing an agent's change here.
 
 Every task here:
 
-- [ ] Boundary check passes
+- [ ] Boundary check (§3) passes
 - [ ] No new GUI-thread blocking; long work on a worker, results by signal
 - [ ] UI tests use `addWidget`, timed waits, no unpatched modal
 
 Schema change:
 
-- [ ] New migration appended, none edited; tested from the previous version with the backup
-      file created
+- [ ] New migration appended, none edited; tested from the previous version, and tested
+      failing mid-migration — version unchanged, backup opens
 
 Packaging, dependencies, resources, or `main.py` change:
 
