@@ -102,6 +102,10 @@ Verify before the first build; `uv sync` does not install or reveal these.
   thread; workers report by signal.
 - Pattern: `QThread` + worker `QObject`, `moveToThread`, start from `thread.started`,
   `finished` → `thread.quit` → `deleteLater`. Hold a reference to both until `finished`.
+- Every blocking call inside a worker — socket, subprocess, lock, queue — takes its own
+  timeout, so the worker always terminates. A worker that cannot guarantee that MUST NOT
+  be written: the app would become unclosable, since a running `QThread` MUST NOT be killed
+  or destroyed — that takes the process down.
 - On close, signal workers to stop and wait with a timeout. If it expires, the close is
   **cancelled**: ignore the close event, keep the window alive, tell the user the app is
   finishing, close for real when the last worker reports `finished`.
@@ -180,8 +184,12 @@ uv run pyside6-deploy -c src/<app>/pysidedeploy.spec -f
 - Import as `from PySide6.QtWidgets import ...`. A bare `import PySide6` breaks module
   detection and the build ships the wrong Qt libraries.
 - `--dry-run` prints the Nuitka command without building.
-- Build once on every declared target OS in the first week, as a walking skeleton. Leaving
-  the first cross-platform build until release is PROHIBITED.
+- **Declared target OSes** are the ones `README.md` lists under its install section. That
+  list is the single source: `[tool.uv] required-environments`, the first-week builds, and
+  the CI matrix all follow it, and adding or dropping an OS means editing it there first.
+- Build once on every declared target OS in the first week, as a walking skeleton — on CI
+  where the developer has no such machine. Leaving the first cross-platform build until
+  release is PROHIBITED.
 
 ### 5.3 Self-check
 
@@ -202,6 +210,9 @@ window reports ready, closes it, exits 0 — or non-zero with the reason.
 | macOS | `<app>-<version>-macos.zip` |
 | Linux | `<app>-<version>-x86_64.AppImage`, or `<app>-<version>-linux-x86_64.tar.gz` if the ADR chose a tarball |
 
+- Each row is produced by `scripts/package.py`, run after the build on that OS: it calls
+  `iscc`, zips the `.app`, or hands the standalone dir to `appimagetool`, and names the
+  output as above. CI's `package` step is that script, not a set of inline commands.
 - `version` in `pyproject.toml` is the single source; installer, About dialog and artifact
   names read it. `--self-check` prints it.
 - Per-user install by default. No user data in the install directory. Uninstall MUST NOT
