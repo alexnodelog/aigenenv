@@ -170,12 +170,12 @@ the rules survive these tools being replaced.
 | UI construction | Qt Widgets, hand-written Python | Qt Designer `.ui` files, QML | — |
 | Persistence | SQLite via SQLAlchemy | stdlib `sqlite3` for trivial cases | — |
 | App data paths | `platformdirs` | — | Hard-coded paths, writing beside the executable |
-| Settings format | TOML | JSON | INI, pickle |
+| Settings format | TOML | JSON — when the app writes settings back | INI, pickle |
 | Long-running work | `QThread` + worker objects | `concurrent.futures` | Blocking the GUI thread |
 | Tests | pytest + pytest-qt | — | — |
 | Build | `pyside6-deploy` (Nuitka-based) | PyInstaller | — |
 | Windows installer | Inno Setup | — | — |
-| macOS / Linux | `.app` bundle / AppImage | — | — |
+| macOS / Linux | `.app` bundle / AppImage via `appimagetool` | Linux: `.tar.gz` of the standalone dir | — |
 
 **Why PySide6 over PyQt6.** Both wrap Qt 6 with near-identical APIs. PySide6 is the
 official Qt binding and is LGPL, so a closed-source application can ship against it when
@@ -186,6 +186,20 @@ disclosure or a purchase.
 binaries, faster startup, builds in minutes. PyInstaller bundles bytecode: builds in
 seconds, larger output, trivially decompilable. Iterate with PyInstaller if build time
 hurts; ship with `pyside6-deploy`.
+
+**Build toolchain is locked.** Left alone, `pyside6-deploy` pip-installs Nuitka and its
+helpers on first run. Under uv that either fails or installs versions `uv.lock` does not
+record. The rule declares them in a locked `build` dependency group instead.
+
+**Settings writer.** stdlib `tomllib` reads TOML but cannot write it. An app that saves its
+own settings needs a writer, and JSON is the stdlib one.
+
+**SQLite backup.** In WAL mode recent writes can sit in the `-wal` file, so copying the
+`.db` file alone is not a consistent snapshot. `sqlite3.Connection.backup` is.
+
+**AppImage.** `appimagetool` turns the standalone directory into an AppImage. Pin a tagged
+release: the `continuous` release changes under the same URL. Licence not yet verified —
+check before first use.
 
 ### 5.2 PC App — Electron
 
@@ -501,10 +515,11 @@ a separate Python installation.
 |---|---|---|
 | Python 3.12+ | Managed by uv | No separate installer needed |
 | PySide6 | Project dependency | Bundles the Qt runtime **and** the Qt tools (`pyside6-designer`, `pyside6-uic`, `pyside6-rcc`). No separate Qt installation |
-| C toolchain | **System — required** | Nuitka compiles to C. Windows: MSVC Build Tools, or let Nuitka fetch MinGW64 on first run. macOS: Xcode Command Line Tools. Linux: gcc or clang, plus ccache |
-| nuitka, zstandard, patchelf | Auto-installed | `pyside6-deploy` installs these itself on first run; patchelf on Linux only |
+| C toolchain | **System — required** | Nuitka compiles to C. Windows: MSVC Build Tools. macOS: Xcode Command Line Tools. Linux: gcc or clang, plus ccache |
+| nuitka, ordered-set, zstandard, patchelf | Project `build` group, locked | Installed by `uv sync --group build`; patchelf on Linux only. Never left to `pyside6-deploy` to install |
 | Inno Setup | System — Windows only | Installer packaging |
-| Qt runtime libraries | System — Linux only | `libxcb`, `libxkbcommon`, `libGL` and friends; absent on minimal distros and server images |
+| Qt runtime libraries | System — Linux only | `libxcb-cursor0`, `libxkbcommon-x11-0`, `libegl1`, `libgl1`; absent on minimal distros and server images. Qt 6.5+ will not start without `libxcb-cursor0` |
+| `appimagetool` | System — Linux only | Tagged release, version and SHA-256 recorded in `DECISIONS.md`. Not needed if the project ships `.tar.gz` |
 
 The C toolchain is the single most common cause of a first build failing on a fresh
 machine. Nothing in `uv sync` reveals that it is missing.
