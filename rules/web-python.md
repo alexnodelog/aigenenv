@@ -22,7 +22,10 @@ holds one track, never both.
   accounts, a designed UI, or pages that must be addressable by URL.
 
 Both tracks share every layer below the UI (§3), so moving from A to B rewrites `ui/` into
-`web/` and nothing else. That is the boundary's purpose; a move is an ADR, not a rewrite.
+`web/` and nothing else. That is the boundary's purpose. A move is recorded as an ADR.
+
+A Track A tool used for work is hosted like Track B (§1 Hosting). Streamlit Community Cloud
+is for personal learning projects only.
 
 ---
 
@@ -39,19 +42,20 @@ Both tracks share every layer below the UI (§3), so moving from A to B rewrites
 | Styling — Track B | Tailwind CSS v4 via its standalone CLI; compiled CSS committed, never hand-edited | Plain CSS | A Node-based asset pipeline; the Tailwind Play CDN; v3-style `tailwind.config.js` |
 | Styling — Track A | Theme in `.streamlit/config.toml` | — | CSS or JS injected through `unsafe_allow_html` or a component to restyle the app |
 | Charts — Track A | Streamlit built-ins, Plotly | — | — |
-| Persistence | SQLite via SQLAlchemy 2.0 (`Mapped[]`), sync `Session` | PostgreSQL via SQLAlchemy + psycopg 3 — when the host has no persistent disk (§4.3); async SQLAlchemy | SQLModel; any other ORM; string-built SQL |
+| Persistence | SQLite via SQLAlchemy 2.0 (`Mapped[]`), sync `Session` | PostgreSQL via SQLAlchemy + psycopg 3 — required when the host has no persistent disk (§4.3); async SQLAlchemy | SQLModel; any other ORM; string-built SQL |
 | Migrations | Alembic, `render_as_batch=True` on SQLite | — | `create_all()` against a deployed DB; editing a shipped revision; hand-applied schema changes |
 | Schemas — Track B | Pydantic v2, separate from ORM models | — | ORM models passed to templates or returned from routes |
 | Config | Frozen dataclass built from `os.environ` in `config.py`; `.env` loaded in development by `uv run --env-file .env` | pydantic-settings | `python-dotenv` calls in application code; `os.environ` read anywhere but `config.py` |
 | Auth — Track A | `st.login` (OIDC, `streamlit[auth]`) + an email allowlist | — | A password form written in Streamlit; streamlit-authenticator |
-| Auth — Track B | Server-side session table, opaque session-ID cookie; passwords hashed with Argon2 via pwdlib | — | passlib; JWT for browser sessions; identity kept in a signed client-side cookie; tokens in `localStorage` |
+| Accounts — Track B | Users table in the app's own database; server-side session table, opaque session-ID cookie; passwords hashed with Argon2 via pwdlib | — | Accounts held by a hosting or database vendor's auth service (Supabase Auth, Firebase Auth and the like); passlib; JWT for browser sessions; identity kept in a signed client-side cookie; tokens in `localStorage` |
+| User file uploads | None | Storage chosen by ADR | The local disk of a host without a persistent disk |
 | Background work | None — work finishes inside the request or rerun | FastAPI `BackgroundTasks` for best-effort, non-durable follow-ups | Threads or tasks started from a handler that must outlive it; a job-queue service (Celery, RQ) — that is a second deployment |
 | Server — Track B | Uvicorn, one process | — | Multiple workers or processes on SQLite |
 | Lint / format | Ruff | — | Black + isort + flake8 |
 | Type check | mypy strict on `domain/`, `services/` | pyright | — |
 | Tests | pytest + pytest-cov; FastAPI `TestClient` (Track B); `streamlit.testing.v1.AppTest` (Track A) | — | unittest-only |
 | Deploy artifact | `Dockerfile` → container image | The host's native Python runtime building from `uv.lock` | Docker required for local development or tests; a release image built on a developer machine |
-| Hosting | Render free web service — only when the server keeps no durable data | Oracle Cloud Always Free VM; Streamlit Community Cloud — Track A only, non-commercial, public non-sensitive data only | Render free disk or Render free Postgres as the store of record; artificial traffic or CPU load to defeat a host's idle policy |
+| Hosting | Render free web service, plus Neon Free Postgres when the app keeps durable data | Oracle Cloud Always Free VM; Streamlit Community Cloud — Track A, personal non-commercial projects with public data only | Render's local disk or Render free Postgres as the store of record; a work tool on Streamlit Community Cloud; artificial traffic or CPU load to defeat a host's idle policy |
 
 ---
 
@@ -65,6 +69,8 @@ Verify before the first build; `uv sync` does not install or reveal these.
 | `static/vendor/htmx.min.js` | In the repository, Track B only. Record the version and SHA-256 in `DECISIONS.md`. The filename carries no version |
 | Docker or Podman | System. Optional on the developer's machine; required in CI (§5.5) |
 | Host account | Render, Oracle Cloud, or Streamlit Community Cloud — whichever `DECISIONS.md` names |
+| Neon account | Account, only when the app keeps durable data. Before first use, confirm in Neon's current terms that the free plan permits commercial use, and confirm the data region if the app holds personal data; record both in `DECISIONS.md` |
+| PostgreSQL client tools (`pg_dump`, `psql`) | System, PostgreSQL projects only. Major version at or above the server's, or `pg_dump` refuses to run |
 | OIDC client registration | Account, Track A with login. Client ID and secret go in `.streamlit/secrets.toml`, never in Git |
 
 ---
@@ -174,18 +180,25 @@ Track B — one request, one thread from Uvicorn's pool.
 - The container's filesystem is read-only to the app except one data directory, `DATA_DIR`,
   read from `Settings`. An adapter MUST NOT resolve a path of its own; it receives it.
 - On a host without a persistent disk, nothing written to `DATA_DIR` survives a restart.
-  User uploads and SQLite files MUST NOT be kept there on such a host.
+  SQLite files and user uploads MUST NOT be kept there on such a host.
 - Templates, static files and bundled resources are located relative to the package
   (`importlib.resources` or `Path(__file__)`), never the working directory.
 
 ### 4.3 Persistence
 
-- **Where durable data may live.** Render's free web service loses its filesystem on every
+- **Where durable data lives.** Render's free web service loses its filesystem on every
   restart, redeploy and spin-down, and its free Postgres expires 30 days after creation
-  with no backups. An app that keeps durable data therefore takes one of two paths, recorded
-  as an ADR: SQLite on the persistent disk of an Oracle Cloud Always Free VM, or PostgreSQL
-  on a managed free tier whose terms permit commercial use and do not expire the database.
-  Check the provider's current terms before choosing; free tiers change yearly.
+  with no backups. An app on Render that keeps durable data stores it in Neon Free
+  Postgres. Neon sleeps after 5 minutes idle and wakes on the next query; the first query
+  after sleep is slower, and nothing else is needed. SQLite on the disk of an Oracle Cloud
+  Always Free VM is the Alternative. An app with no durable data uses SQLite in a temp dir,
+  or no database.
+- The app reaches the database only through `DATABASE_URL` in `Settings`. Moving to another
+  PostgreSQL provider changes that variable and nothing in the code.
+- A PostgreSQL project keeps the offline default test suite on SQLite and also runs the
+  adapter tests and `alembic upgrade head` against a PostgreSQL service container in CI. A
+  migration MUST pass on both. SQL only one engine accepts stays in `adapters/` and is
+  covered by the PostgreSQL run.
 - One `Engine` per process, created in the composition root. A `Session` MUST NOT cross
   threads or requests.
 - SQLite: `PRAGMA foreign_keys=ON`, WAL, and a non-zero `busy_timeout` on every connection,
@@ -201,9 +214,12 @@ Track B — one request, one thread from Uvicorn's pool.
   `alembic upgrade head`. On failure it exits non-zero, the server does not start, and
   original and backup stay.
 - PostgreSQL: the app cannot dump its own database. A deploy carrying a migration is a
-  Blocking step (`GLOBAL_RULES.md` §4) that names the dump taken before it.
-- A backup on the same VM does not survive losing the VM. An app holding durable data
-  SHOULD copy backups off the host on a schedule, method recorded in `DECISIONS.md`.
+  Blocking step (`GLOBAL_RULES.md` §4) that names the `pg_dump` taken before it and checks
+  that the dump restores into an empty database. Neon Free's 6-hour restore window is a
+  second line of defence, not the backup.
+- An app holding durable data SHOULD take a backup on a schedule and keep it off the
+  database host — a dump stored only inside Neon, or a SQLite backup only on the same VM,
+  does not survive losing that host. The method is recorded in `DECISIONS.md`.
 - A database at a revision the code does not know → refuse to start, log why.
 - Shipped revisions are append-only. Fixes are new revisions.
 
@@ -217,8 +233,13 @@ Track B — one request, one thread from Uvicorn's pool.
   environment and are listed in `.env.example`. Track A's `[auth]` section is the one
   exception: `st.login` reads it from `.streamlit/secrets.toml`, which is gitignored,
   documented by `secrets.toml.example`, and supplied by the host as a secret file.
+- Accounts live in the app's own users table, so they move with the database. A vendor's
+  auth service MUST NOT hold them.
 - There is no OS credential store on a server. End-user passwords are stored only as
-  Argon2 hashes, never logged, never placed in session state. Storing an end user's own
+  Argon2 hashes, never logged, never placed in session state.
+- No mail provider is selected. A feature that sends mail — password reset, address
+  verification, notifications — needs an ADR naming the provider and its free-tier terms
+  before it is built. Until then, a password reset is done by an administrator. Storing an end user's own
   third-party credential — their API token, their mail password — needs an ADR naming how it
   is encrypted at rest and with which deployment key.
 - Track B sessions: a random session ID in a cookie with `HttpOnly`, `Secure` and
@@ -282,7 +303,8 @@ The smoke test (`tests/smoke/`) starts the built image, waits for health, reques
 stops the container, and exits 0 — or non-zero with the reason.
 
 - It MUST NOT touch real data or real secrets: `DATA_DIR` is a fresh temp dir, the database
-  is a new SQLite file migrated from empty, and every secret is a test placeholder. Login
+  is a new SQLite file migrated from empty — or, for a PostgreSQL project in CI, an empty
+  database in the service container — and every secret is a test placeholder. Login
   is not exercised against a real identity provider.
 - Timeouts: healthy within 60 s, `/` within 10 s, stopped within 10 s. A timeout fails the
   test.
@@ -292,7 +314,7 @@ stops the container, and exits 0 — or non-zero with the reason.
 | Output | Where it runs |
 |---|---|
 | Container image from the `Dockerfile` at a tagged commit | Render, built by the host from that tag; or an Oracle VM, pulled or built there |
-| `uv.lock` at a tagged commit | Streamlit Community Cloud, which reads `uv.lock` directly |
+| `uv.lock` at a tagged commit | Streamlit Community Cloud — personal projects only — which reads `uv.lock` directly |
 
 - `version` in `pyproject.toml` is the single source; `/healthz`, the image tag and the Git
   tag read it. CI fails a tag that does not match.
@@ -306,8 +328,9 @@ stops the container, and exits 0 — or non-zero with the reason.
 ### 5.5 CI
 
 - Push / PR: `uv sync --locked`, Ruff, mypy, pytest (offline), boundary check,
-  `alembic check` if the app persists data. Track B also regenerates the stylesheet and
-  fails on `git diff --exit-code`. Then build the image and run the smoke test.
+  `alembic check` if the app persists data. A PostgreSQL project also runs the adapter tests
+  and migrations against a PostgreSQL service container. Track B also regenerates the
+  stylesheet and fails on `git diff --exit-code`. Then build the image and run the smoke test.
 - Version tag: all of the above → trigger the deploy → confirm `/healthz` reports the tagged
   version and `/` responds. Allow two minutes for a cold start before failing. On failure,
   stop and report; never redeploy or retry automatically.
@@ -320,7 +343,7 @@ stops the container, and exits 0 — or non-zero with the reason.
 | Layer | Tool | Framework |
 |---|---|---|
 | `domain/`, `services/` | pytest with fake ports | MUST NOT import Streamlit or FastAPI |
-| `adapters/` | pytest against a real SQLite file in `tmp_path`, schema from `alembic upgrade head` | no |
+| `adapters/` | pytest against a real SQLite file in `tmp_path`, schema from `alembic upgrade head`; PostgreSQL projects repeat this in CI (§4.3) | no |
 | `web/` — Track B | `TestClient` on `create_app(settings)` | yes |
 | `ui/` — Track A | `AppTest.from_function`, fake services passed as arguments | yes |
 | Built image | smoke test (§5.3) | yes |
@@ -365,12 +388,14 @@ Check these first when reviewing a change here.
    in a module global — one user sees another's data.
 5. `async def` handlers calling the sync `Session` or a sync HTTP client.
 6. A SQLite file or uploads on Render's free disk; Render free Postgres as the only copy of
-   the data.
-7. Logic in route handlers, pages or templates; a hidden button treated as authorization.
-8. `|safe`, `Markup`, or an f-string building HTML from user input.
-9. An autogenerated Alembic revision applied unread; `create_all()` at startup.
-10. "The deploy command succeeded, so it works." Check `/healthz` for the version.
-11. Reaching for npm, React, or a CDN script to escape an htmx or Streamlit limit. That is a
+   the data; a scheduled ping to keep a free service awake.
+7. Supabase Auth, Firebase Auth or a similar service proposed for login because it is
+   quicker. Accounts belong in the app's own users table.
+8. Logic in route handlers, pages or templates; a hidden button treated as authorization.
+9. `|safe`, `Markup`, or an f-string building HTML from user input.
+10. An autogenerated Alembic revision applied unread; `create_all()` at startup.
+11. "The deploy command succeeded, so it works." Check `/healthz` for the version.
+12. Reaching for npm, React, or a CDN script to escape an htmx or Streamlit limit. That is a
     change of archetype, which needs an ADR, not a workaround.
 
 ---
@@ -387,8 +412,9 @@ Every task here:
 Schema change:
 
 - [ ] New Alembic revision appended and read by hand, none edited; upgraded from the
-      previous head on a database with rows; `alembic check` clean; a failing migration
-      leaves the revision and rows unchanged and the backup opens
+      previous head on a database with rows — on PostgreSQL too, for a PostgreSQL
+      project; `alembic check` clean; a failing migration leaves the revision and rows
+      unchanged and the backup opens
 
 Auth, session, or access change:
 
