@@ -41,7 +41,7 @@ Track B (§1 Hosting).
 | Styling — Track B | Tailwind CSS v4 via its standalone CLI; compiled CSS committed, never hand-edited | Plain CSS | A Node-based asset pipeline; the Tailwind Play CDN; v3-style `tailwind.config.js` |
 | Styling — Track A | Theme in `.streamlit/config.toml` | — | CSS or JS injected through `unsafe_allow_html` or a component to restyle the app |
 | Charts — Track A | Streamlit built-ins, Plotly | — | — |
-| Persistence | SQLite via SQLAlchemy 2.0 (`Mapped[]`), sync `Session` | PostgreSQL via SQLAlchemy + psycopg 3 — required when the host has no persistent disk (§4.3) | async SQLAlchemy; SQLModel; any other ORM; string-built SQL |
+| Persistence | SQLAlchemy 2.0 (`Mapped[]`), sync `Session`. SQLite for development, tests, and hosts with a persistent disk; PostgreSQL via psycopg 3 in production when the host has no persistent disk and the app keeps durable data (§4.3) | PostgreSQL on a host that has a persistent disk | async SQLAlchemy; SQLModel; any other ORM; string-built SQL |
 | Migrations | Alembic, `render_as_batch=True` on SQLite | — | `create_all()` against a deployed DB; editing a shipped revision; hand-applied schema changes |
 | Schemas — Track B | Pydantic v2, separate from ORM models | — | ORM models passed to templates or returned from routes |
 | Config | Frozen dataclass built from `os.environ` in `config.py`; `.env` loaded in development by `uv run --env-file .env` | pydantic-settings | `python-dotenv` calls in application code; `os.environ` read anywhere but `config.py` |
@@ -190,10 +190,11 @@ Track B — one request, one thread from Uvicorn's pool.
   durable data uses SQLite in a temp dir, or no database.
 - The app reaches the database only through `DATABASE_URL` in `Settings`. Moving to another
   PostgreSQL provider changes that variable and nothing in the code.
-- A PostgreSQL project keeps the offline default test suite on SQLite and also runs the
-  adapter tests and `alembic upgrade head` against a PostgreSQL service container in CI. A
-  migration MUST pass on both. SQL only one engine accepts stays in `adapters/` and is
-  covered by the PostgreSQL run.
+- Development and the default test run use SQLite, offline. A PostgreSQL project also runs
+  the adapter tests and `alembic upgrade head` against a PostgreSQL service container in CI,
+  and a migration MUST pass on both. A local PostgreSQL MAY be used but MUST NOT be required
+  to develop or to run the default tests. SQL only one engine accepts stays in `adapters/`
+  and is covered by the PostgreSQL run.
 - One `Engine` per process, created in the composition root. A `Session` MUST NOT cross
   threads or requests.
 - SQLite: `PRAGMA foreign_keys=ON`, WAL, and a non-zero `busy_timeout` on every connection,
