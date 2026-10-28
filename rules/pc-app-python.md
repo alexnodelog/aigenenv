@@ -38,7 +38,7 @@ archetype), or if there is no window (a script).
 
 ## 2. Prerequisites
 
-`uv sync` neither installs nor reveals these. Setup: skill `pyside-release`.
+`uv sync` neither installs nor reveals these. Procedure: skill `pyside-release`.
 
 | Item | Scope |
 |---|---|
@@ -159,7 +159,7 @@ archetype), or if there is no window (a script).
 
 ## 5. Build and package
 
-Commands, per-OS steps and CI job setup: skill `pyside-release`.
+Procedure: skill `pyside-release`.
 
 ### 5.1 Lock the toolchain
 
