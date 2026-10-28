@@ -251,6 +251,7 @@ Two tracks. Both deploy identically, so a project MAY start on one and move to t
 | Charts | Streamlit built-ins, Plotly | — | — |
 | State | `st.session_state` | — | — |
 | Login | `st.login` (OIDC — Google, Microsoft, …) + an email allowlist | — | A password form written in Streamlit; streamlit-authenticator |
+| Tests | pytest + `streamlit.testing.v1.AppTest` | — | — |
 
 Streamlit reruns the entire script top to bottom on every interaction, keeps session state
 per user *and per tab*, and gives almost no control over CSS. Its login tells the app *who*
@@ -274,7 +275,7 @@ JavaScript framework.
 | Password hashing | pwdlib (Argon2) | — | passlib — unmaintained, broken on Python 3.13+ |
 | User file uploads | None by default; storage chosen by ADR | — | The local disk of a host without a persistent disk |
 | Server | Uvicorn | — | — |
-| Tests | pytest + httpx | — | — |
+| Tests | pytest + FastAPI `TestClient` (built on httpx) | — | — |
 
 **Why htmx 2, not 4.** htmx 4.0 shipped in August 2026 with renamed events and changed
 defaults. The htmx project keeps 2.x as its `latest` release until early 2027 and supports
@@ -285,13 +286,26 @@ agent must check which major version a project vendors before writing htmx code.
 
 | Category | Default | Alternative | Prohibited |
 |---|---|---|---|
-| Database | SQLite | PostgreSQL — required when the host has no persistent disk (§6) | — |
+| Database | SQLite for development, tests, and hosts with a persistent disk; PostgreSQL in production when the host has no persistent disk and the app keeps durable data (§6) | PostgreSQL on a host that has a persistent disk | — |
+| PostgreSQL driver | psycopg 3 | — | — |
 | ORM | SQLAlchemy 2.0 (`Mapped[]` declarative) | — | SQLModel |
 | Migrations | Alembic | — | Hand-applied schema changes; `create_all()` on a deployed database |
 | Deploy artifact | Container image from a `Dockerfile` | The host's native Python runtime building from `uv.lock` | Docker required for local development or tests |
+| Background work | None — work finishes inside the request or rerun | FastAPI `BackgroundTasks` for best-effort follow-ups | A job-queue service (Celery, RQ) |
 
 Sharing everything below the UI is what makes a move from Track A to Track B a rewrite of
 the presentation layer only.
+
+**Where the database runs.** The code reads one connection URL, so each stage uses the
+database that suits it: SQLite on the developer's PC, offline and with no setup; PostgreSQL
+in a CI service container, which catches the differences between the two engines before
+deploy; Neon in production. Local development and the default tests therefore never need
+the production database. A developer MAY run PostgreSQL locally — in a container, or as a
+separate Neon project for development — but a project MUST NOT require it.
+
+**Why no job queue.** A queue needs a broker and a separate worker process: two more
+services to host and keep alive on free tiers that have room for one. Work that must
+survive the request is out of scope for this archetype until an ADR names where it runs.
 
 **Agent scoping rule for this archetype.** Business logic lives under `services/` and
 contains no UI calls. Presentation lives in templates and route handlers and contains no
@@ -384,7 +398,7 @@ All selections below are free tiers that permit commercial use, except where not
 | Archetype | Default | Alternative | Notes |
 |---|---|---|---|
 | `web-static` | Cloudflare Pages | GitHub Pages, Netlify | Cloudflare: unlimited bandwidth, 500 builds/month, 100 sites. GitHub Pages requires a public repo. Netlify now meters a monthly credit allowance |
-| `web-python` | Render (free web service) + Neon Free Postgres when the app keeps durable data | Oracle Cloud Always Free; **Streamlit Community Cloud — Track A, personal non-commercial practice only** | Render free: 512 MB RAM, sleeps after 15 min idle, about 1 min to wake. Neon Free: 0.5 GB per project, sleeps after 5 min idle and wakes on the next query |
+| `web-python` | Render (free web service) + Neon Free Postgres when the app keeps durable data | Oracle Cloud Always Free; **Streamlit Community Cloud — Track A, personal non-commercial practice only** | Render free: 512 MB RAM, sleeps after 15 min idle, about 1 min to wake. Neon Free: 1 GB per project, sleeps after 5 min idle and wakes on the next query |
 | `web-ts` | Cloudflare Workers | **Vercel — non-commercial projects only** | Cloudflare D1 provides free SQLite |
 | `web-api` | Cloudflare Pages (frontend) + Render (backend) + Neon Free Postgres when the backend keeps durable data | Oracle Cloud Always Free (both) | The only archetype spanning two platforms on free tiers |
 | Desktop | GitHub Releases | — | — |
@@ -406,6 +420,10 @@ activity, and the database stays down until someone restores it by hand from the
 dashboard; an internal tool left unused for a week would appear broken. Supabase's bundled
 login and file storage would also place user accounts inside one vendor. Neon provides
 Postgres only and wakes on its own.
+
+Neon Free's instant restore reaches back 6 hours, capped at 1 GB of change history. It
+undoes a mistake noticed the same morning; it is not a backup. An app holding data its
+users cannot recreate keeps its own dumps off Neon.
 
 Before a project first uses Neon, confirm in Neon's current terms that the free plan
 permits commercial use, and confirm the data region if the app holds personal data. Neither
@@ -556,6 +574,8 @@ Actions matrix with real runners per OS instead of Wine or equivalents.
 | Render account | Account | Free tier sleeps after idle |
 | Neon account | Account — only when the app keeps durable data | Free, no card. Check terms and region first (§6) |
 | Streamlit Community Cloud account | Account — Track A, personal practice only | Free, non-commercial (§6) |
+| OIDC client registration | Account — Track A with login | Google, Microsoft or another provider; client ID and secret kept out of Git |
+| PostgreSQL client tools (`pg_dump`, `psql`) | System — PostgreSQL projects only | Major version at or above the server's, or `pg_dump` refuses to run |
 
 No Node.js. If a project in this archetype reaches for npm, it has outgrown the archetype
 and should move to `web-ts` or `web-api`.
