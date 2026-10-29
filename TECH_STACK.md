@@ -65,7 +65,8 @@ modules** (what capabilities it has).
 
 **Decision order for web projects.** Start at the top and stop at the first "yes":
 
-1. Is there any server logic at all? No → `web-static`.
+1. Does anything have to happen on a server — including a form whose contents must be sent
+   somewhere or stored? No → `web-static`.
 2. Is the audience internal, or is it a dashboard / data tool / PoC? Yes → `web-python`.
 3. Does the server genuinely need Python libraries (ML, scientific, pandas, a Python-only
    SDK)? No → `web-ts`. Yes → continue.
@@ -90,8 +91,8 @@ Applies to every archetype.
 |---|---|---|---|
 | Python runtime | Python 3.12+ | — | Python 3.11 and below |
 | Python packaging | **uv** (`uv.lock`, `.python-version`) | — | Poetry, pipenv, bare pip in projects |
-| Node runtime | Node.js LTS (`.nvmrc`) | — | — |
-| Node packaging | **pnpm** (`pnpm-lock.yaml`) | — | npm, yarn |
+| Node runtime | Node.js LTS, installed by pnpm, pinned in `package.json` `devEngines.runtime` | — | `.nvmrc` and separate version managers (nvm, fnm, Volta) as the version record |
+| Node packaging | **pnpm**, standalone install, exact version in `package.json` `packageManager` (`pnpm-lock.yaml`) | — | npm, yarn; Corepack |
 | Frontend language | TypeScript, `strict: true` | — | Plain JavaScript in new code |
 | Python lint + format | Ruff | — | Black + isort + flake8 (superseded) |
 | Python typing | mypy, strict on domain code | pyright | — |
@@ -111,6 +112,12 @@ as a single binary, and replaces pip, virtualenv, pipx, and pyenv at once — so
 version pinning comes free and no PC needs a separate version manager installed. This
 overrides the Poetry preference in the philosophy document; recorded as ADR-0001.
 
+**Why pnpm installs Node, not the other way round.** Since pnpm 11, pnpm ships as a
+standalone executable and installs the Node.js version the project declares in
+`devEngines.runtime`, the way uv installs Python. The older route — Corepack, bundled with
+Node, fetching pnpm — ends with Node 25, which no longer ships Corepack. One tool installed
+first, one file recording both versions.
+
 ---
 
 ## 4. Development Environment
@@ -121,7 +128,7 @@ Reproducibility is guaranteed by lockfiles, not by containers:
 
 ```
 uv sync      # Python: exact deps + exact interpreter version
-pnpm install # Node: exact deps
+pnpm install # Node: exact deps + exact runtime version
 ```
 
 A project MUST start from a clean clone with those commands alone. A project MUST NOT
@@ -223,19 +230,32 @@ for years, a second language costs more than a hundred megabytes on disk.
 
 ### 5.3 Web — Static
 
-No server process. Everything is built once and served from a CDN.
+No server process. Everything is built once and served from a CDN; what runs, runs in the
+visitor's browser.
 
 | Category | Default | Alternative | Prohibited |
 |---|---|---|---|
 | Language | HTML, CSS, TypeScript | — | Untyped JavaScript |
-| Build | Vite | Astro — content-heavy sites with many pages | A framework chosen before a need for one exists |
-| Styling | Tailwind CSS | Plain CSS | — |
-| Interactivity | Standard DOM APIs | Alpine.js | React for a page with three buttons |
-| Forms / backend calls | Hosting platform's form handling or edge function | — | — |
+| Build | Vite, multi-page | Astro, static output — content-heavy sites with many pages | A component framework or client-side router; Astro server output or adapters |
+| Styling | Tailwind CSS v4 | Plain CSS | — |
+| Interactivity | Standard DOM APIs | Alpine.js, CSP build (`@alpinejs/csp`) | React for a page with three buttons; Alpine's standard build |
+| Third-party runtime resources | None — everything ships in the build | — | CDN scripts, hosted web fonts, tracking tags |
+| Tests | Vitest; DOM code runs in real Chromium through Vitest browser mode (Playwright provider) | — | jsdom, happy-dom |
 
-**Promotion path.** When this archetype needs real server logic, it becomes `web-python` or
-`web-ts`. Do not grow a backend inside a static site through edge functions; that is the
-signal to change archetype.
+**Promotion path.** A form whose contents must be sent somewhere or stored, a call that needs
+a secret, or a login is server logic, and the project becomes `web-python` or `web-ts`. Do
+not grow a backend inside a static site through edge functions or Worker scripts; that is
+the signal to change archetype. A form that computes and shows a result in the page is not
+server logic.
+
+**Why a real browser for DOM tests.** A simulated DOM such as jsdom is faster and needs no
+browser download, but which behaviours it gets wrong — layout, focus, applied CSS — cannot
+be told from the code, so no rule can say when it is safe. Pure logic is tested in Node;
+everything that touches the page runs in Chromium. One browser download, once.
+
+**Why Alpine's CSP build.** The standard build evaluates expressions from strings, which a
+Content-Security-Policy without `'unsafe-eval'` blocks. The CSP build works under that
+policy.
 
 ### 5.4 Web — Python
 
@@ -397,12 +417,18 @@ All selections below are free tiers that permit commercial use, except where not
 
 | Archetype | Default | Alternative | Notes |
 |---|---|---|---|
-| `web-static` | Cloudflare Pages | GitHub Pages, Netlify | Cloudflare: unlimited bandwidth, 500 builds/month, 100 sites. GitHub Pages requires a public repo. Netlify now meters a monthly credit allowance |
+| `web-static` | Cloudflare Workers, static assets only (no Worker script) | Netlify Free; GitHub Pages — public repository, non-commercial sites only | Workers Free: static asset requests free and unlimited; 20,000 files per deployment, 25 MiB per file. Netlify Free: 300 credits/month shared by deploys, bandwidth and requests; every site pauses until the next cycle when they run out. GitHub Pages: terms exclude online businesses, e-commerce and commercial SaaS |
 | `web-python` | Render (free web service) + Neon Free Postgres when the app keeps durable data | Oracle Cloud Always Free; **Streamlit Community Cloud — Track A, personal non-commercial practice only** | Render free: 512 MB RAM, sleeps after 15 min idle, about 1 min to wake. Neon Free: 1 GB per project, sleeps after 5 min idle and wakes on the next query |
 | `web-ts` | Cloudflare Workers | **Vercel — non-commercial projects only** | Cloudflare D1 provides free SQLite |
 | `web-api` | Cloudflare Pages (frontend) + Render (backend) + Neon Free Postgres when the backend keeps durable data | Oracle Cloud Always Free (both) | The only archetype spanning two platforms on free tiers |
 | Desktop | GitHub Releases | — | — |
 | Mobile | EAS Build → internal link → Google Play | — | — |
+
+**Cloudflare Workers, not Pages.** Cloudflare directs new projects to Workers static
+assets and adds new features only there; Pages keeps working but is no longer the target.
+An assets-only Worker has no script, so it serves files the way Pages does, with
+`_headers` and `_redirects` supported. The `web-api` row still names Pages for the
+frontend; it is revisited when that archetype's rule is written.
 
 **Vercel.** Its free Hobby plan is restricted to non-commercial use. Any project that
 might be monetized MUST NOT depend on it. Cloudflare carries no such restriction, which is
@@ -546,8 +572,8 @@ machine. Nothing in `uv sync` reveals that it is missing.
 
 | Requirement | Scope | Note |
 |---|---|---|
-| Node.js LTS | System | — |
-| pnpm | System (via corepack) | — |
+| pnpm | System — standalone | Installed first. Exact version in `packageManager` |
+| Node.js LTS | Installed by pnpm | Version in `devEngines.runtime`. No separate Node installer |
 | Native module build toolchain | **System — required** | better-sqlite3 is rebuilt against Electron's ABI. Windows: MSVC Build Tools + Python. macOS: Xcode Command Line Tools. Linux: build-essential |
 | Playwright browsers | Project (`pnpm exec playwright install`) | Downloaded, not bundled |
 | Code signing certificate | Account — paid, optional | Unsigned Windows builds trigger SmartScreen warnings; unsigned macOS builds require a Gatekeeper override. Defer until distribution matters |
@@ -559,8 +585,10 @@ Actions matrix with real runners per OS instead of Wine or equivalents.
 
 | Requirement | Scope | Note |
 |---|---|---|
-| Node.js LTS, pnpm | System | — |
+| pnpm | System — standalone | Installed first. Exact version in `packageManager` |
+| Node.js LTS | Installed by pnpm | Version in `devEngines.runtime`. No separate Node installer |
 | wrangler | Project dependency | Cloudflare deploys and local preview |
+| Chromium for tests | Project (`pnpm exec playwright install chromium`) | Downloaded once; tests then run offline |
 | Cloudflare account | Account | Free |
 
 ### 9.5 Web — Python
@@ -584,7 +612,8 @@ and should move to `web-ts` or `web-api`.
 
 | Requirement | Scope | Note |
 |---|---|---|
-| Node.js LTS, pnpm | System | — |
+| pnpm | System — standalone | Installed first. Exact version in `packageManager` |
+| Node.js LTS | Installed by pnpm | Version in `devEngines.runtime`. No separate Node installer |
 | wrangler | Project dependency | Also runs D1 locally; no separate database install |
 | Playwright browsers | Project | — |
 | Cloudflare account | Account | Free |
@@ -604,7 +633,8 @@ Additionally:
 
 | Requirement | Scope | Note |
 |---|---|---|
-| Node.js LTS, pnpm | System | — |
+| pnpm | System — standalone | Installed first. Exact version in `packageManager` |
+| Node.js LTS | Installed by pnpm | Version in `devEngines.runtime`. No separate Node installer |
 | Expo CLI, EAS CLI | Run via `npx` | No global install |
 | Expo account | Account | Free, ~30 builds/month |
 | Android Studio + Android SDK + emulator image | **System — required** | Local builds and the emulator. The only build path that survives a restricted network |
