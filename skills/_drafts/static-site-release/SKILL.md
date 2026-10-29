@@ -1,25 +1,35 @@
 # static-site-release (draft)
 
-Procedure extracted from `rules/web-static.md` §2 and §5. Draft for step 7 — items marked
-**[verify]** were not confirmed against current tool documentation when this was written.
+Procedure extracted from `rules/web-static.md` §2 and §5. Draft for step 7: frontmatter
+(`name`, `description`) is added then. Items marked **[verify]** were not confirmed against
+current tool documentation when this was written.
 
 ## 1. Machine setup
 
-1. Node: install the LTS major named in `.nvmrc`. Check: `node --version`.
-2. pnpm: install the exact version in `package.json` `packageManager`, standalone.
-   Node 25+ does not bundle Corepack, so `corepack enable` is not a setup step.
-   - `npm install -g pnpm@<version>` works anywhere npm exists. **[verify]** pnpm's own
-     standalone installer as the preferred path.
+1. Install pnpm standalone, first — it does not need Node.
+   - macOS / Linux: `curl -fsSL https://get.pnpm.io/install.sh | sh -`
+   - Windows (PowerShell): `Invoke-WebRequest https://get.pnpm.io/install.ps1 -UseBasicParsing | Invoke-Expression`
+   - **[verify]** both commands, and how to install the exact `packageManager` version.
    - Check: `pnpm --version` equals the `packageManager` version.
+2. Node is not installed separately. `package.json` declares it:
+   ```json
+   "devEngines": {
+     "runtime": { "name": "node", "version": "<LTS version>", "onFail": "download" }
+   }
+   ```
+   `pnpm install` downloads that Node. **[verify]** accepted version syntax (exact vs range).
+   Check: `pnpm exec node --version`.
 3. `pnpm install`. If it stops on an install-script error, add only the named package to
    `allowBuilds` in `pnpm-workspace.yaml`, after confirming why it needs a script.
+4. `pnpm exec playwright install chromium` — once per machine; tests then run offline.
 
 ## 2. Project skeleton (walking skeleton, first week)
 
-- `vite.config.ts`:
+- `vite.config.ts` — build input and test projects:
   ```ts
-  import { defineConfig } from "vite";
+  import { defineConfig } from "vitest/config";
   import tailwindcss from "@tailwindcss/vite";
+  import { playwright } from "@vitest/browser-playwright";
   import { resolve } from "node:path";
 
   const pages = ["index.html", "404.html"]; // add every page here
@@ -32,8 +42,42 @@ Procedure extracted from `rules/web-static.md` §2 and §5. Draft for step 7 —
         input: Object.fromEntries(pages.map((p) => [p, resolve(__dirname, p)])),
       },
     },
+    test: {
+      projects: [
+        {
+          extends: true,
+          test: {
+            name: "lib",
+            environment: "node",
+            include: ["tests/lib/**/*.test.ts", "tests/boundaries.test.ts"],
+          },
+        },
+        {
+          extends: true,
+          test: {
+            name: "ui",
+            include: ["tests/ui/**/*.test.ts"],
+            browser: {
+              enabled: true,
+              headless: true,
+              provider: playwright(),
+              instances: [{ browser: "chromium" }],
+            },
+          },
+        },
+        {
+          extends: true,
+          test: { name: "smoke", environment: "node", include: ["tests/smoke/**/*.test.ts"] },
+        },
+      ],
+    },
   });
   ```
+  **[verify]** Vitest 4 `projects` and browser-provider syntax; whether `smoke` should be a
+  separate script so `vitest run` before `build` does not fail on a missing `dist/`.
+- UI test loading a real page: `import html from "../../about/index.html?raw"`, put its
+  `<body>` into `document.body`, then call the page's `mount()`. **[verify]** `?raw` on
+  HTML files in browser mode.
 - `src/styles/app.css`: `@import "tailwindcss";`
 - `version.txt`: a small Vite plugin (`generateBundle` → `emitFile`) writes
   `package.json` `version`. **[verify]** hook name under Rolldown.
@@ -61,31 +105,31 @@ Procedure extracted from `rules/web-static.md` §2 and §5. Draft for step 7 —
     Cache-Control: public, max-age=31536000, immutable
   ```
   **[verify]** whether Vite's build output needs any `style-src` relaxation.
-- First deploy of the skeleton follows §4, then the human checks the `*.workers.dev` URL.
+- First deploy of the skeleton follows §4, then the human opens the `*.workers.dev` URL.
 
 ## 3. Cloudflare account and token
 
 1. Create a free Cloudflare account; note the account ID.
-2. Create an API token with only the permission needed to deploy Workers on that account
+2. Create an API token with only the permission needed to deploy Workers on that account.
    **[verify]** exact permission name (Account → Workers Scripts → Edit).
 3. Add `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as GitHub Actions secrets. List
-   both in `.env.example` with placeholders. Never in `wrangler.jsonc`, never local files
-   committed.
+   both in `.env.example` with placeholders. Never in `wrangler.jsonc` or any committed file.
 4. Do not connect the repository to Cloudflare's Git builds.
 
 ## 4. CI workflow
 
 - On push / PR:
   1. checkout
-  2. setup Node from `.nvmrc` (`actions/setup-node`, `node-version-file`)
-  3. setup pnpm from `packageManager` **[verify]** current action: `pnpm/action-setup` or
-     `pnpm/setup` (v2 requires pnpm 11+)
-  4. `pnpm install --frozen-lockfile`
+  2. set up pnpm from `packageManager` — no separate Node setup step; pnpm installs Node from
+     `devEngines.runtime`. **[verify]** current action (`pnpm/setup` v2 for pnpm 11+) and
+     whether it runs the runtime download.
+  3. `pnpm install --frozen-lockfile`
+  4. `pnpm exec playwright install --with-deps chromium` (cache the browser directory)
   5. `pnpm exec biome ci .`
   6. `pnpm exec tsc --noEmit -p tsconfig.json && pnpm exec tsc --noEmit -p tsconfig.lib.json`
-  7. `pnpm exec vitest run`
+  7. `pnpm exec vitest run --project lib --project ui`
   8. `pnpm build`
-  9. smoke test (`pnpm exec vitest run tests/smoke` or a dedicated script)
+  9. `pnpm exec vitest run --project smoke`
 - On tag `v*`: all of the above, then
   1. fail if the tag ≠ `v` + `package.json` `version`
   2. `pnpm exec wrangler deploy` with the two secrets in the environment
@@ -106,8 +150,8 @@ known-good page.
 
 ## 6. Rollback
 
-- `pnpm exec wrangler rollback` to the previous version (Workers keeps the last 100), or
-  re-run the tag workflow for the previous tag.
+- `pnpm exec wrangler rollback` to the previous version, or re-run the tag workflow for the
+  previous tag.
 - After either, repeat §5 with the previous version number.
 - Note any URL renamed since that version: its `_redirects` line is gone with the rollback.
 
@@ -115,7 +159,8 @@ known-good page.
 
 Reads `dist/` only; no server, no network.
 
-1. Parse the build input list from `vite.config.ts` (or export `pages` from a shared module).
+1. Read the page list from the same `pages` array the build uses (export it from a shared
+   module).
 2. For each built `.html`: collect `href`, `src`, `srcset`; skip `#…`, `mailto:`, `tel:`;
    fail on another origin in `src` / `<link href>`; map `/x/` → `dist/x/index.html` and
    `/a.css` → `dist/a.css`; fail if missing.
