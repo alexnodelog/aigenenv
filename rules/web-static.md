@@ -128,8 +128,10 @@ or needs a component framework (`web-ts`).
 - `404.html` exists at the root and is served with status 404
   (`not_found_handling = "404-page"`). A fallback that answers unknown paths with 200 hides
   every broken link.
-- A published URL is a contract. Renaming or removing a page adds a `301` line to
-  `public/_redirects` in the same commit; the file's default status is 302.
+- A published URL is a contract. Renaming or merging a page adds a `301` line to
+  `public/_redirects` in the same commit, pointing at the page that replaced it; the file's
+  default status is 302. A page removed with no replacement answers 404 — it is not
+  redirected to the home page.
 - Everything in `dist/` is public, including what preview deployments upload. There is no
   access control: a draft, an internal note or an "unlisted" page MUST NOT be in it.
 
@@ -140,9 +142,11 @@ or needs a component framework (`web-ts`).
   MUST NOT live only there: browsers clear it. The page offers export to a file and import
   from one, or the project is not static.
 - Keys are prefixed with the site's name. Each stored value is JSON carrying a `schema`
-  number and is read through a `lib/` parser that validates it. A malformed value or an
-  unknown `schema` falls back to defaults and the page tells the user saved data was reset;
-  it MUST NOT break the page.
+  number and is read through a `lib/` parser that validates it.
+- A value the page cannot read — malformed, or a `schema` newer than it knows, as after a
+  rollback — is never overwritten. It is copied to a `<key>.unread` key, the page runs on
+  defaults, and it tells the user, offering that copy for export. It MUST NOT break the
+  page.
 - A change to a stored shape increments `schema`, and `lib/` converts the previous shape.
 - Storage access can throw — private browsing, a full quota, storage disabled. The page
   catches it and keeps working without persistence.
@@ -157,10 +161,13 @@ or needs a component framework (`web-ts`).
 - There are no accounts and no credentials. A password checked in JavaScript, content hidden
   by CSS or script, and an unguessable URL are not access control; content that needs it
   needs a server.
-- `public/_headers` sets, for `/*`: a Content-Security-Policy whose `script-src` has no
-  `'unsafe-inline'` or `'unsafe-eval'`, `X-Content-Type-Options: nosniff`, a
-  `Referrer-Policy`, and `frame-ancestors`. On a host that does not read `_headers`, the CSP
-  goes in a `<meta http-equiv>` on every page and the ADR names what is lost.
+- `public/_headers` sets, for `/*`, a Content-Security-Policy with at least
+  `default-src 'self'`, `script-src 'self'`, `object-src 'none'`, `base-uri 'self'`,
+  `form-action 'none'`, `frame-ancestors 'none'`, and `connect-src` listing exactly the
+  origins the site fetches; no `'unsafe-inline'` or `'unsafe-eval'` anywhere. Also
+  `X-Content-Type-Options: nosniff` and a `Referrer-Policy`. On a host that does not read
+  `_headers`, the CSP goes in a `<meta http-equiv>` on every page, and the ADR records that
+  `frame-ancestors` is lost.
 - Invalid input is reported next to its field, in words. An unexpected exception is caught
   at `mount()` and the page shows what failed and what to try. No error-reporting service
   is used by default.
@@ -190,6 +197,8 @@ Procedure: skill `static-site-release`.
   build emits only listed ones.
 - Tailwind v4 is configured in `src/styles/app.css` (`@import "tailwindcss";`). There is no
   `tailwind.config.js`.
+- Astro: `astro check`, then `astro build`. Every file in `src/pages/` is built, so there
+  is no input list; every other rule in §5 applies unchanged.
 - Fonts are self-hosted, from a package or `public/`.
 - `dist/` stays within the host's per-deployment limits — on Workers Free, 20,000 files and
   25 MiB per file. Media that does not fit needs an ADR naming where it lives.
@@ -206,7 +215,9 @@ and exits 0 — or non-zero naming each failure. It checks that:
   `dist/`;
 - no built HTML contains an inline `<script>`, an `on*=` attribute, or a URL on another
   origin in `src` or `<link href>`;
-- `dist/_headers` exists and sets the CSP;
+- `dist/_headers` sets the CSP with every directive §4.4 requires, and no
+  `'unsafe-inline'` or `'unsafe-eval'`;
+- `dist/` holds no `.map`, `.env*` or Markdown file;
 - `dist/version.txt` holds the `version` from `package.json`;
 - `dist/` is within the limits of §5.2.
 
@@ -228,7 +239,8 @@ and exits 0 — or non-zero naming each failure. It checks that:
 - Push / PR: `pnpm install --frozen-lockfile`, Biome, `tsc --noEmit` on both configs,
   Vitest including the boundary check, `vite build`, the smoke test.
 - Version tag: all of the above → deploy → confirm that `/version.txt` matches the tag, `/`
-  answers 200, a random path answers 404 with an HTML body, and `/` carries the CSP header.
+  answers 200, a random path answers 404 with an HTML body, and the CSP header on `/` equals
+  the one in `_headers`.
 
 ---
 
@@ -246,6 +258,8 @@ and the result is shown — not the rule itself.
 - A UI test loads the page's real HTML file into the document, then calls `mount()`. Markup
   written by hand in a test is PROHIBITED: the test then passes against a page that does not
   exist.
+- Controls are found by role and label text, never by CSS selector or id, so an input
+  without a working `<label>` fails its test.
 - Assert what the user sees: text, `disabled`, `hidden`, `aria-invalid`.
 - `fetch` is stubbed per test and restored after it. `localStorage` is cleared before each
   test, and the path where storage throws is tested.
@@ -285,18 +299,23 @@ The mistakes agents most often make here. Each breaks the rule in the section na
 
 Every task here:
 
+- [ ] Build and smoke test pass
+- [ ] No script, stylesheet, font or image from another origin; every `fetch` origin is in
+      `connect-src`
+
+Any change under `src/`:
+
 - [ ] Boundary check (§3) passes
 - [ ] No inline script, `on*=` attribute, or non-constant string passed to `innerHTML`
-- [ ] No resource loaded from another origin; every `fetch` origin is in `connect-src`
 
 New, renamed, or removed page:
 
-- [ ] Listed in the build input; smoke test passes; the old URL answers 301
+- [ ] Listed in the build input; a renamed URL answers 301 to its replacement
 
 Stored-data shape change:
 
-- [ ] `schema` incremented; tested reading the previous shape, a malformed value, and
-      storage that throws
+- [ ] `schema` incremented; tested reading the previous shape, a malformed value, a newer
+      `schema` (kept, not overwritten), and storage that throws
 
 Dependencies, `vite.config.ts`, `wrangler.jsonc`, `_headers`, or `_redirects` change:
 
