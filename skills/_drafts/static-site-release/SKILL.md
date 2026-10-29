@@ -143,7 +143,7 @@ Against the deployed URL:
 - `GET /version.txt` → body equals the tag's version
 - `GET /` → 200
 - `GET /<random-string>/` → 404 and a non-empty HTML body
-- `GET /` → response has `Content-Security-Policy`
+- `GET /` → `Content-Security-Policy` value equals the `/*` entry in `dist/_headers`
 
 A verifier that fails intermittently is suspected before the host: test it against a
 known-good page.
@@ -165,6 +165,8 @@ Reads `dist/` only; no server, no network.
    fail on another origin in `src` / `<link href>`; map `/x/` → `dist/x/index.html` and
    `/a.css` → `dist/a.css`; fail if missing.
 3. Fail on `<script>` without `src`, on any `on[a-z]+=` attribute.
-4. Check `dist/_headers` contains `Content-Security-Policy`.
-5. Check `dist/version.txt`.
-6. Count files; fail above 20,000 or on any file above 25 MiB.
+4. Parse the `/*` CSP in `dist/_headers`: each directive required by the rule present with
+   its required value; fail on `'unsafe-inline'` or `'unsafe-eval'`.
+5. Fail on any `*.map`, `.env*` or `*.md` file in `dist/`.
+6. Check `dist/version.txt`.
+7. Count files; fail above 20,000 or on any file above 25 MiB.
