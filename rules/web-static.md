@@ -19,19 +19,18 @@ or needs a component framework (`web-ts`).
 
 | Category | Default | Alternative | Prohibited |
 |---|---|---|---|
-| Node.js | An LTS major, recorded in `.nvmrc` | — | Odd-numbered (non-LTS) majors |
-| Packaging | pnpm, exact version in `package.json` `packageManager`; `pnpm-lock.yaml` | — | npm, yarn, bun; `npx` in scripts or docs |
+| Node.js | An LTS line, installed by pnpm, pinned in `package.json` `devEngines.runtime` | — | Odd-numbered (non-LTS) majors; `.nvmrc`, nvm, fnm, Volta as the version record |
+| Packaging | pnpm, standalone install, exact version in `package.json` `packageManager`; `pnpm-lock.yaml` | — | npm, yarn, bun; Corepack; `npx` in scripts or docs |
 | Language | TypeScript, `strict: true`, ES modules | — | Plain JavaScript in new code |
 | Build | Vite, multi-page: one HTML file per URL | Astro with static output, for content-heavy sites built from Markdown | React, Vue, Svelte or any component framework, including as Astro islands; a client-side router; Astro server output or any adapter; webpack, Parcel |
 | Styling | Tailwind CSS v4 via `@tailwindcss/vite` | Plain CSS | `tailwind.config.js`, `@tailwind` directives, a PostCSS config for Tailwind; the Tailwind Play CDN; CSS-in-JS |
 | Interactivity | Standard DOM APIs | Alpine.js CSP build (`@alpinejs/csp`), bundled | Alpine's standard build (needs `unsafe-eval`); jQuery; htmx — there is no server to answer it |
 | Third-party runtime resources | None: every script, stylesheet, font and image ships in `dist/` | — | `<script>` or `<link>` to a CDN; Google Fonts links; tracking or analytics tags |
-| Forms and server calls | None (§4.1) | — | Worker scripts, Pages Functions, edge or serverless functions; form-backend services; any request that carries a secret |
 | Browser storage | `localStorage` (§4.3) | IndexedDB | Cookies for application data |
 | Lint / format | Biome | ESLint + Prettier | — |
 | Type check | `tsc --noEmit` on both configs (§3); Astro: `astro check` | — | Treating a passing `vite build` as a type check |
-| Tests | Vitest + jsdom | Playwright, for behaviour jsdom cannot show (§6) | Jest |
-| Hosting | Cloudflare Workers, assets only: `wrangler.jsonc` with `assets` and no `main` | Netlify Free; GitHub Pages — public repository and non-commercial sites only | Vercel Hobby; a Worker script or Pages Functions; `not_found_handling = "single-page-application"` |
+| Tests | Vitest; DOM code runs in real Chromium through Vitest browser mode (`@vitest/browser-playwright`) | — | jsdom, happy-dom; Jest |
+| Hosting | Cloudflare Workers, assets only: `wrangler.jsonc` with `assets` and no `main` | Netlify Free; GitHub Pages — public repository and non-commercial sites only | Vercel Hobby; a Worker script, Pages Functions or any edge function; form-backend services; `not_found_handling = "single-page-application"` |
 
 ---
 
@@ -41,11 +40,11 @@ or needs a component framework (`web-ts`).
 
 | Item | Scope |
 |---|---|
-| Node.js | System. The major in `.nvmrc`. Node 25 and later ship without Corepack |
-| pnpm | System. The exact version in `packageManager`, installed standalone — never assumed to come with Node |
+| pnpm | System, standalone, installed first. The exact version in `packageManager` |
+| Node.js | Installed by pnpm from `devEngines.runtime`. No separate Node installer |
 | Cloudflare account | Account. Free plan |
 | Cloudflare API token | Account. Stored only as a CI secret, scoped to deploying Workers on one account |
-| Playwright browsers | Project, downloaded by `pnpm exec playwright install`. Only with the ADR in §6 |
+| Chromium for tests | Project, downloaded once by `pnpm exec playwright install chromium`; tests then run offline |
 
 ---
 
@@ -53,13 +52,12 @@ or needs a component framework (`web-ts`).
 
 ```
 <repo>/
-├── package.json          version, packageManager, scripts
+├── package.json          version, packageManager, devEngines.runtime, scripts
 ├── pnpm-lock.yaml
 ├── pnpm-workspace.yaml   pnpm settings: allowBuilds
-├── .nvmrc
 ├── tsconfig.json         whole project, strict
 ├── tsconfig.lib.json     src/lib/ only, no DOM library
-├── vite.config.ts        every page listed in the build input
+├── vite.config.ts        build input (every page); Vitest projects: lib in Node, ui in Chromium
 ├── biome.json
 ├── wrangler.jsonc        assets only; no main
 ├── index.html            one HTML file per URL: <name>/index.html serves /<name>/
@@ -111,8 +109,8 @@ or needs a component framework (`web-ts`).
 - Data reaches the DOM through `textContent`, `setAttribute` and `createElement`.
   `innerHTML`, `outerHTML` and `insertAdjacentHTML` with any string that is not a
   compile-time constant are PROHIBITED.
-- A `<form>` never submits to a URL; its `submit` handler calls `preventDefault()` and works
-  in the page. A form whose contents must leave the browser is a change of archetype.
+- A `<form>` computes and shows its result in the page: it has no `action`, and its `submit`
+  handler calls `preventDefault()`.
 - Controls are native `<button>`, `<a>`, `<input>`, `<select>`; every input has a `<label>`.
   A clickable `<div>` is a defect.
 - `fetch` reaches only public HTTPS endpoints that need no key and send CORS headers, each
@@ -175,8 +173,8 @@ Procedure: skill `static-site-release`.
 
 ### 5.1 Lock the toolchain
 
-- `.nvmrc` and `packageManager` are the single source for the Node and pnpm versions; CI
-  reads both. Every install outside a developer's first setup uses
+- `packageManager` and `devEngines.runtime` (with `onFail: "download"`) are the single
+  source for the pnpm and Node versions; CI installs from both. Every install outside a developer's first setup uses
   `pnpm install --frozen-lockfile`.
 - Dependency install scripts run only for packages named in `allowBuilds` in
   `pnpm-workspace.yaml`. Allowing every package, or setting `minimumReleaseAge` to 0 to get
@@ -239,9 +237,8 @@ and exits 0 — or non-zero naming each failure. It checks that:
 | Layer | Tool | DOM |
 |---|---|---|
 | `src/lib/` | Vitest, `node` environment | MUST NOT be available |
-| `src/ui/` | Vitest, `jsdom` environment | yes |
+| `src/ui/` | Vitest browser mode, Chromium | yes, a real browser |
 | Built site | smoke test (§5.3) | — |
-| Behaviour only a browser shows — layout, focus order, real CSS | Playwright, with an ADR | yes |
 
 Most tests are in the first row. A UI test proves an input reaches the right `lib/` function
 and the result is shown — not the rule itself.
@@ -275,10 +272,12 @@ The mistakes agents most often make here. Each breaks the rule in the section na
 9. A Worker script or edge function added to make a form submit or hide a key. That is a
    change of archetype, which needs an ADR, not a workaround (§1).
 10. pnpm 9/10 settings (`onlyBuiltDependencies`) or "allow all builds" to silence the
-    install-script error; `npm install` or `npx` in docs and CI (§5.1).
+    install-script error; `.nvmrc`, Corepack, `npm install` or `npx` in docs and CI (§1,
+    §5.1).
 11. "`vite build` passed, so the types are fine" (§5.2).
 12. A page renamed without a `_redirects` line (§4.2).
 13. "The deploy command succeeded, so it works." Check `/version.txt` and the 404 (§5.5).
+14. Switching UI tests to jsdom "because it is faster" (§1, §6).
 
 ---
 
