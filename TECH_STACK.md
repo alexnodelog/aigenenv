@@ -57,11 +57,18 @@ modules** (what capabilities it has).
 | Web — TypeScript | `rules/web-ts.md` | Real app UI, and nothing forces Python on the server |
 | Web — Split | `rules/web-api.md` | Real app UI **and** Python needed on the server |
 | Mobile | `rules/mobile.md` | iOS / Android application |
+| Agent Plugin | `rules/agent-plugin.md` | The deliverable runs **inside an AI coding tool**: skills, agents, commands, hooks. No window or site of its own |
 
 | Module | File | Adds |
 |---|---|---|
 | AI / RAG | `rules/module-ai-rag.md` | LLM, embedding, vector search **at runtime** |
 | Deployment | `rules/module-deployment.md` | Release automation, signing, distribution |
+
+**Agent Plugin against the others.** A plugin has no screen and no server; the AI coding
+tool that loads it is its runtime. If the project needs its own window, it is a PC app. If
+it needs its own site or API, it is a web archetype. If the deliverable is a running
+program with no interface of its own — a CLI tool, an MCP server — no archetype covers it
+yet; add one when a real project needs it rather than stretching this one.
 
 **Decision order for web projects.** Start at the top and stop at the first "yes":
 
@@ -409,6 +416,50 @@ backend to an always-free VM instead of a sleeping free tier.
 
 Target floor: Android 7+, iOS 16.4+.
 
+### 5.8 Agent Plugin
+
+The deliverable is instructions an AI coding tool loads and follows. It is Markdown. The
+host tool is the runtime, so there is no build, no bundle, and nothing to compile.
+
+| Category | Default | Alternative | Prohibited |
+|---|---|---|---|
+| Content format | Markdown with YAML front matter. Every command, skill, agent, and hook file carries at least a `description` — a missing one produces load errors | — | Instructions embedded in code strings |
+| Layout | Components at the plugin root: `skills/<name>/SKILL.md`, `agents/`, `commands/`, `hooks/`. Only the manifest sits in `.claude-plugin/plugin.json` | — | **Components inside `.claude-plugin/`** — the host reads that directory as manifest only |
+| Host manifests | The Claude Code manifest is canonical; manifests for other hosts are generated from it | One manifest, when only one host is supported | Hand-maintained copies that drift |
+| MCP server registration | Declaring an existing server the plugin makes available, through the plugin's MCP configuration | — | — |
+| MCP server implementation | — | — | **Prohibited in this archetype.** A server is a running program, not instructions a host reads. If one is genuinely needed it is a separate deliverable on its own stack, and the reason is recorded in `DECISIONS.md` |
+| Scripts | **None.** Markdown only | TypeScript or Python from the Common Stack. For a script that must run *before* any runtime exists: PowerShell on Windows and POSIX `sh` elsewhere, as a matched pair, with the reason recorded | A script where a skill is enough |
+| Hooks | Hooks check, block, and log | — | A hook that auto-approves a tool call |
+| Validation | `claude plugin validate <path> --strict`, plus a check that every front matter block and internal link resolves | — | Releasing without validation |
+| Behaviour tests | **Scenario records**: for each skill, a fixed request and the expected behaviour, written down and re-run on each supported host | — | "It worked in my session" with no record |
+| Secrets | None. Hooks and scripts neither read nor write credentials | — | Tokens in plugin files |
+| Distribution | A GitHub repository with `.claude-plugin/marketplace.json` at its root | An `npx` installer for hosts with no plugin system, which adds a Node.js requirement | Distributing files by hand |
+| Documentation | README stating the prerequisite (an AI coding tool), the supported hosts, and each host's install command | — | Install steps only in a wiki |
+
+**Why Markdown first.** A skill is read and followed by the host's model. It needs no
+runtime, no build, and no dependencies, so it cannot fail to install. Every script adds a
+runtime requirement the user's machine may not meet.
+
+**Why registration is allowed and implementation is not.** Registering an MCP server is a
+few lines of configuration pointing at something that already exists. Implementing one
+means shipping a process with transports, dependencies, and a lifecycle — a program the
+host launches alongside the plugin, not instructions it loads. Most requests that look
+like "add a small MCP server" are satisfied by one skill.
+
+**Why no hook may approve.** A hook that approves tool calls removes the human from the
+loop, which is the one thing this framework will not trade away.
+
+**Folder name to check.** At least one host treats a root `rules/` directory as its own
+rule location. A plugin storing rule files there MUST confirm no supported host claims the
+name.
+
+**Hosts differ** in how they install plugins, how they prompt for approval, and how closely
+their model follows instructions. A plugin names the hosts it supports and keeps a scenario
+record per host.
+
+Scenario records are integration tests: they need a live host and are not deterministic, so
+they are excluded from the default test run.
+
 ---
 
 ## 6. Hosting
@@ -423,6 +474,7 @@ All selections below are free tiers that permit commercial use, except where not
 | `web-api` | Cloudflare Pages (frontend) + Render (backend) + Neon Free Postgres when the backend keeps durable data | Oracle Cloud Always Free (both) | The only archetype spanning two platforms on free tiers |
 | Desktop | GitHub Releases | — | — |
 | Mobile | EAS Build → internal link → Google Play | — | — |
+| `agent-plugin` | GitHub repository, used directly as the marketplace source | — | No hosting service involved. Public repository is enough; no terms restrict a plugin repository's use |
 
 **Cloudflare Workers, not Pages.** Cloudflare directs new projects to Workers static
 assets and adds new features only there; Pages keeps working but is no longer the target.
@@ -657,7 +709,20 @@ the network allows it — it just cannot be the foundation.
 iOS is the exception and stays deferred: a local iOS build requires macOS and Xcode, so
 for iOS the cloud build is the only option short of buying a Mac.
 
-### 9.9 Modules
+### 9.9 Agent Plugin
+
+| Requirement | Scope | Note |
+|---|---|---|
+| Base items in §9.1 | As listed | — |
+| Each supported host tool | System, one per host | Needed to test the plugin, and each carries its own account or subscription for its model |
+| Node.js LTS, pnpm | System — only if scripts are TypeScript or an `npx` installer is published | As in §9.6 |
+| PowerShell / POSIX `sh` | Included with the OS | Only for the pre-runtime bootstrap case |
+| OS build toolchain | **None** | Nothing is compiled |
+
+The lightest archetype to set up and the heaviest to test: verifying behaviour means running
+a real session on every host the plugin claims to support.
+
+### 9.10 Modules
 
 | Requirement | Scope | Note |
 |---|---|---|
@@ -667,7 +732,7 @@ for iOS the cloud build is the only option short of buying a Mac.
 | sentence-transformers, FAISS | Project dependencies | — |
 | Model provider API key | Account — AI/RAG, hosted models only | Usage-based cost. Never committed |
 
-### 9.10 OS build toolchain summary
+### 9.11 OS build toolchain summary
 
 The items below are the OS-level prerequisites that package managers cannot install for
 you. Everything else in this document installs through uv, pnpm, or a project dependency.
@@ -683,11 +748,11 @@ you. Everything else in this document installs through uv, pnpm, or a project de
 | Any | JDK 17 | `mobile` — Gradle builds and Maestro |
 | Any | Android Studio + Android SDK | `mobile` — local builds and emulator |
 
-### 9.11 Total cost at the target state
+### 9.12 Total cost at the target state
 
 | Item | Cost | Triggered by |
 |---|---|---|
-| Everything in §9.1 through §9.10 not listed below | Free, commercial use permitted | — |
+| Everything in §9.1 through §9.11 not listed below | Free, commercial use permitted | — |
 | Google Play developer account | One-time fee | Publishing an Android app to the store |
 | Apple Developer membership | Yearly | Publishing an iOS app — deferred |
 | Windows / macOS code signing certificate | Yearly, optional | Distributing desktop builds without OS warnings |
@@ -698,7 +763,7 @@ Nothing else in this stack requires payment at any stage, including the final de
 state. Vercel's free tier is excluded from the stack as a default precisely because its
 non-commercial restriction would break that guarantee.
 
-### 9.12 Network dependence
+### 9.13 Network dependence
 
 Every archetype needs network access once, to install. What differs is what happens after
 that. On a restricted or filtered network, the column that matters is the middle one.
@@ -712,6 +777,7 @@ that. On a restricted or filtered network, the column that matters is the middle
 | `web-ts` | Network | Offline, except `wrangler` features that proxy to Cloudflare | Network |
 | `web-api` | Network | **Fully offline** | Network |
 | `mobile` | Network, including Gradle's first dependency fetch | **Offline once the Gradle cache is warm** | Android: local. iOS: network |
+| `agent-plugin` | Network | Offline for validation; **network to test**, since the host's model is a cloud service | Network |
 | AI/RAG module | Network for model download | **Fully offline with Ollama** | — |
 
 Two rules follow from this table.
