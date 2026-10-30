@@ -279,28 +279,15 @@ and the result is shown — not the rule itself.
 
 ## 7. Where agents go wrong
 
-The mistakes agents most often make here. Each breaks the rule in the section named.
+Only what the sections above do not already say: idioms from older versions, and ways
+around a prohibition when something does not work.
 
-1. Reaching for React, a router, or a component framework for a few interactions (§1,
-   §4.1).
-2. Tailwind v3 habits: `tailwind.config.js`, `@tailwind base;`, a PostCSS config (§1,
-   §5.2).
-3. An API key in a `VITE_` variable or in source, "because it is only a public key" (§4.4).
-4. A password prompt or hidden section treated as access control (§4.4).
-5. `innerHTML` built from user input or a fetched response (§4.1).
-6. A new page that works in the dev server and is missing from `dist/` — not in the build
-   input (§5.2).
-7. An SPA not-found fallback, or no `404.html`, so broken links answer 200 (§4.2).
-8. A CDN `<script>`, a Google Fonts `<link>`, or an analytics tag pasted into a page (§1).
-9. A Worker script or edge function added to make a form submit or hide a key. That is a
-   change of archetype, which needs an ADR, not a workaround (§1).
-10. pnpm 9/10 settings (`onlyBuiltDependencies`) or "allow all builds" to silence the
-    install-script error; `.nvmrc`, Corepack, `npm install` or `npx` in docs and CI (§1,
-    §5.1).
-11. "`vite build` passed, so the types are fine" (§5.2).
-12. A page renamed without a `_redirects` line (§4.2).
-13. "The deploy command succeeded, so it works." Check `/version.txt` and the 404 (§5.5).
-14. Switching UI tests to jsdom "because it is faster" (§1, §6).
+1. pnpm 9/10 setting names (`onlyBuiltDependencies`) in `pnpm-workspace.yaml` or
+   `package.json`. pnpm 11 reads `allowBuilds` (§5.1).
+2. A Worker script or edge function added to make a form submit or hide a key. That is a
+   change of archetype, which needs an ADR, not a workaround.
+3. UI tests moved to jsdom or happy-dom "because they are faster". Speed is not grounds for
+   leaving the real browser.
 
 ---
 
