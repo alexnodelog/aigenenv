@@ -238,20 +238,13 @@ and the result is displayed — not the rule itself.
 
 ## 7. Where agents go wrong
 
-The mistakes agents most often make here. Each breaks the rule in the section named.
+Only what the sections above do not already say: idioms from older versions, and ways
+around a prohibition when something does not work.
 
 1. PyQt idioms in PySide6: `pyqtSignal`, `pyqtSlot`, `exec_()`, short-form enums. PySide6
    uses `Signal`, `Slot`, `exec()`, `Qt.AlignmentFlag.AlignLeft`.
-2. Blocking work inside a slot; widgets updated from a worker instead of by signal (§4.1).
-3. `QThread` held in a local variable, collected while running (§4.1).
-4. Validation and decisions written in `ui/` because that is where the button is (§3).
-5. One `Session` shared across threads (§4.3).
-6. `QSettings` or a settings file beside the executable (§1).
-7. A hung test — unpatched modal, untimed wait — rerun instead of fixed (§6).
-8. Letting `pyside6-deploy` install Nuitka; `import PySide6` at module top (§5.1, §5.2).
-9. Switching to PyInstaller to escape a Nuitka error. A build error is not grounds for the
+2. Switching to PyInstaller to escape a Nuitka error. A build error is not grounds for the
    Alternative's ADR.
-10. An adapter calling `platformdirs` on its own (§4.2).
 
 ---
 
