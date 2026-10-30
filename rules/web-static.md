@@ -146,7 +146,7 @@ or needs a component framework (`web-ts`).
 - A value the page cannot read — malformed, or a `schema` newer than it knows, as after a
   rollback — stays untouched under its key. The page runs on defaults in memory, does not
   write to that key, and tells the user, offering the stored value for export. Only the
-  user's explicit discard replaces it. It MUST NOT break the page.
+  user's discard, confirmed in a second step, replaces it. It MUST NOT break the page.
 - A change to a stored shape increments `schema`, and `lib/` converts the previous shape.
 - Storage access can throw — private browsing, a full quota, storage disabled. The page
   catches it and keeps working without persistence.
@@ -155,20 +155,23 @@ or needs a component framework (`web-ts`).
 
 - Build-time settings come from `import.meta.env.VITE_*`, read only in `src/config.ts` and
   validated there for presence, type and format; a missing or empty required value, or
-  one in the wrong format, fails the build. Every `VITE_` value ships to
-  every visitor, so none of them is a secret. Widening Vite's `envPrefix` is PROHIBITED.
+  one in the wrong format, fails the build. Every `VITE_` value ships to every visitor,
+  so none of them is a secret. Widening Vite's `envPrefix` is PROHIBITED.
 - The site has no deployment secrets at runtime. The host's deploy token is the project's
   only secret and exists only in CI.
 - There are no accounts and no credentials. A password checked in JavaScript, content hidden
   by CSS or script, and an unguessable URL are not access control; content that needs it
   needs a server.
-- `public/_headers` sets, for `/*`, a Content-Security-Policy with at least
-  `default-src 'self'`, `script-src 'self'`, `object-src 'none'`, `base-uri 'self'`,
-  `form-action 'none'`, `frame-ancestors 'none'`, and `connect-src` listing exactly the
-  origins the site fetches; no `'unsafe-inline'` or `'unsafe-eval'` anywhere. Also
-  `X-Content-Type-Options: nosniff` and `Referrer-Policy: strict-origin-when-cross-origin`. On a host that does not read
-  `_headers`, the CSP goes in a `<meta http-equiv>` on every page, and the ADR records that
-  `frame-ancestors` is lost.
+- `public/_headers` sets, for `/*`, a Content-Security-Policy with exactly these
+  directives: `default-src 'self'`, `script-src 'self'`, `style-src 'self'`,
+  `img-src 'self' data:`, `font-src 'self' data:` (Vite inlines small assets as `data:`
+  URLs), `object-src 'none'`, `base-uri 'self'`, `form-action 'none'`,
+  `frame-ancestors 'none'`, and `connect-src` listing exactly the origins the site fetches
+  (`'none'` if it fetches nothing); no `'unsafe-inline'` or `'unsafe-eval'` anywhere. Also
+  `X-Content-Type-Options: nosniff` and `Referrer-Policy: strict-origin-when-cross-origin`.
+- A host that cannot set response headers is allowed only for a content-only site; there
+  the CSP goes in a `<meta http-equiv>` on every page, without `frame-ancestors`, which a
+  meta tag cannot carry.
 - Invalid input is reported next to its field, in words. An unexpected exception is caught
   at `mount()` and the page shows what failed and what to try. No error-reporting service
   is used by default.
@@ -214,8 +217,8 @@ The smoke test (`tests/smoke/`) runs after `pnpm build`, against `dist/` on disk
 and exits 0 — or non-zero naming each failure. It checks that:
 
 - every page in the build input, and `404.html`, exists in `dist/`;
-- every local `href`, `src` and `srcset` in every built HTML file resolves to a file in
-  `dist/`;
+- every local reference — `href`, `src`, `srcset` in built HTML; `url()` and `@import` in
+  built CSS — resolves to a file in `dist/`;
 - no built HTML contains an inline `<script>` or an `on*=` attribute;
 - no URL on another origin appears in HTML `src`, `srcset` or `<link href>`, or in built
   CSS `url()` or `@import`;
@@ -233,8 +236,8 @@ and exits 0 — or non-zero naming each failure. It checks that:
 
 - `version` in `package.json` is the single source; `version.txt` and the Git tag read it.
   CI fails a tag that does not match.
-- The host's Git-connected builds stay off. CI deploys the tagged commit after every check
-  passes.
+- The host's Git-connected builds stay off. CI deploys the tagged commit only if it is on
+  `main` and every check passes.
 - Rollback is `wrangler rollback` to the previous version, or a redeploy of the previous
   tag. It also rolls back `_redirects`, so a URL renamed since then breaks again.
 
