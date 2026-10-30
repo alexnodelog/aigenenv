@@ -132,7 +132,8 @@ current tool documentation when this was written.
   9. `pnpm exec vitest run --project smoke`
 - On tag `v*`: all of the above, then
   1. fail if the tag ≠ `v` + `package.json` `version`
-  2. `pnpm exec wrangler deploy` with the two secrets in the environment
+  2. `pnpm exec wrangler deploy`, the two secrets set in `env:` of this step only — never at
+     workflow or job level
   3. post-deploy check (§5)
   4. on any failure: stop, report, no retry, no redeploy
 
