@@ -118,6 +118,7 @@ current tool documentation when this was written.
 
 ## 4. CI workflow
 
+- Every workflow sets `permissions: contents: read` at the top; nothing needs more.
 - On push / PR:
   1. checkout
   2. set up pnpm from `packageManager` — no separate Node setup step; pnpm installs Node from
@@ -161,13 +162,16 @@ known-good page.
 Reads `dist/` only; no server, no network.
 
 1. Read the page list from the same `pages` array the build uses (export it from a shared
-   module).
+   module). Astro: list `src/pages/`.
 2. For each built `.html`: collect `href`, `src`, `srcset`; skip `#…`, `mailto:`, `tel:`;
-   fail on another origin in `src` / `<link href>`; map `/x/` → `dist/x/index.html` and
+   fail on another origin in `src`, `srcset` or `<link href>`; map `/x/` → `dist/x/index.html` and
    `/a.css` → `dist/a.css`; fail if missing.
-3. Fail on `<script>` without `src`, on any `on[a-z]+=` attribute.
-4. Parse the `/*` CSP in `dist/_headers`: each directive required by the rule present with
-   its required value; fail on `'unsafe-inline'` or `'unsafe-eval'`.
-5. Fail on any `*.map`, `.env*` or `*.md` file in `dist/`.
+3. Fail on `<script>` without `src`, on any `on[a-z]+=` attribute. In every built `.css`,
+   fail on `url(...)` or `@import` pointing at another origin.
+4. Parse the `/*` block in `dist/_headers`: each CSP directive the rule requires present
+   with its required value, no `'unsafe-inline'` or `'unsafe-eval'`, `nosniff`, and
+   `Referrer-Policy: strict-origin-when-cross-origin`.
+5. Fail on any `*.map`, `.env*` or `*.md` file in `dist/`; run the project's secret scanner
+   over `dist/`.
 6. Check `dist/version.txt`.
 7. Count files; fail above 20,000 or on any file above 25 MiB.
