@@ -73,8 +73,10 @@ current tool documentation when this was written.
     },
   });
   ```
-  **[verify]** Vitest 4 `projects` and browser-provider syntax; whether `smoke` should be a
-  separate script so `vitest run` before `build` does not fail on a missing `dist/`.
+  **[verify]** Vitest 4 `projects` and browser-provider syntax.
+- `package.json` scripts, so the standard test command never depends on build state:
+  `"test": "vitest run --project lib --project ui"`,
+  `"test:smoke": "vitest run --project smoke"` (run only after `pnpm build`).
 - UI test loading a real page: `import html from "../../about/index.html?raw"`, put its
   `<body>` into `document.body`, then call the page's `mount()`. **[verify]** `?raw` on
   HTML files in browser mode.
@@ -95,10 +97,11 @@ current tool documentation when this was written.
   }
   ```
   No `main`. **[verify]** whether to set `workers_dev` / `preview_urls` explicitly.
-- `public/_headers` (template; adjust `connect-src` to the origins the site fetches):
+- `public/_headers` (template; `connect-src 'none'` until the site fetches something, then
+  exactly those origins — `'self'` only for same-origin fetches):
   ```
   /*
-    Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'
+    Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'
     X-Content-Type-Options: nosniff
     Referrer-Policy: strict-origin-when-cross-origin
   /assets/*
@@ -107,13 +110,25 @@ current tool documentation when this was written.
   **[verify]** whether Vite's build output needs any `style-src` relaxation.
 - First deploy of the skeleton follows §4, then the human opens the `*.workers.dev` URL.
 
+### Astro variant
+
+- `pnpm create astro` with the minimal template; output stays static (no adapter).
+- Tailwind through `vite.plugins` in `astro.config.mjs`. **[verify]**
+- Scripts: `"check": "astro check && tsc --noEmit -p tsconfig.lib.json"`,
+  `"build": "astro build"`; output goes to `dist/`, so `wrangler.jsonc`, `_headers`,
+  smoke test and CI stay as above.
+- Vitest reads Astro's config through `getViteConfig` from `astro/config` in
+  `vitest.config.ts`; same three projects. **[verify]**
+- `version.txt` comes from an Astro integration hook or a post-build script. **[verify]**
+
 ## 3. Cloudflare account and token
 
-1. Create a free Cloudflare account; note the account ID.
+1. Create a free Cloudflare account; note the account ID (an identifier, not a secret).
 2. Create an API token with only the permission needed to deploy Workers on that account.
    **[verify]** exact permission name (Account → Workers Scripts → Edit).
-3. Add `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as GitHub Actions secrets. List
-   both in `.env.example` with placeholders. Never in `wrangler.jsonc` or any committed file.
+3. Add `CLOUDFLARE_API_TOKEN` as a GitHub Actions secret — the only secret. Put the account
+   ID in `wrangler.jsonc` (`account_id`) or a GitHub Actions variable. List the token in
+   `.env.example` with a placeholder; never in any committed file.
 4. Do not connect the repository to Cloudflare's Git builds.
 
 ## 4. CI workflow
@@ -132,11 +147,15 @@ current tool documentation when this was written.
   8. `pnpm build`
   9. `pnpm exec vitest run --project smoke`
 - On tag `v*`: all of the above, then
-  1. fail if the tag ≠ `v` + `package.json` `version`
-  2. `pnpm exec wrangler deploy`, the two secrets set in `env:` of this step only — never at
+  1. fail if the tag ≠ `v` + `package.json` `version`, or if the tagged commit is not on
+     `main` (`git merge-base --is-ancestor <sha> origin/main`, after fetching `main`)
+  2. `pnpm exec wrangler deploy`, the token set in `env:` of this step only — never at
      workflow or job level
   3. post-deploy check (§5)
-  4. on any failure: stop, report, no retry, no redeploy
+  4. on any failure: stop, report, no retry, no redeploy. A failed post-deploy check means
+     the wrong site may be live: the report names the failed check and the rollback command
+     (§6), and the human decides.
+- Optional: a repository ruleset that lets only the owner create or move `v*` tags.
 
 ## 5. Post-deploy check
 
@@ -163,11 +182,11 @@ Reads `dist/` only; no server, no network.
 
 1. Read the page list from the same `pages` array the build uses (export it from a shared
    module). Astro: list `src/pages/`.
-2. For each built `.html`: collect `href`, `src`, `srcset`; skip `#…`, `mailto:`, `tel:`;
-   fail on another origin in `src`, `srcset` or `<link href>`; map `/x/` → `dist/x/index.html` and
-   `/a.css` → `dist/a.css`; fail if missing.
-3. Fail on `<script>` without `src`, on any `on[a-z]+=` attribute. In every built `.css`,
-   fail on `url(...)` or `@import` pointing at another origin.
+2. Collect references: `href`, `src`, `srcset` from every built `.html`; `url(...)` and
+   `@import` from every built `.css` (CSS paths resolve relative to the CSS file). Skip
+   `#…`, `data:`, `mailto:`, `tel:`. Fail on another origin; map `/x/` →
+   `dist/x/index.html` and `/a.css` → `dist/a.css`; fail if the file is missing.
+3. Fail on `<script>` without `src`, on any `on[a-z]+=` attribute.
 4. Parse the `/*` block in `dist/_headers`: each CSP directive the rule requires present
    with its required value, no `'unsafe-inline'` or `'unsafe-eval'`, `nosniff`, and
    `Referrer-Policy: strict-origin-when-cross-origin`.
