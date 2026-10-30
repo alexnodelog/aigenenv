@@ -241,6 +241,8 @@ and exits 0 — or non-zero naming each failure. It checks that:
 - Version tag: all of the above → deploy → confirm that `/version.txt` matches the tag, `/`
   answers 200, a random path answers 404 with an HTML body, and the CSP header on `/` equals
   the one in `_headers`.
+- The deploy token is set only on the deploy step; no other job or step can read it.
+  Install, build and test run third-party code.
 
 ---
 
