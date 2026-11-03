@@ -341,19 +341,54 @@ that line. This split is what makes the archetype survivable as it grows.
 
 ### 5.5 Web — TypeScript
 
-One language, one platform, one deployment.
+One language, one process, one deployment. Next.js runs as a Node.js server in a
+container, the same way `web-python` runs.
 
 | Category | Default | Alternative | Prohibited |
 |---|---|---|---|
 | UI library | React | — | — |
-| Framework | Next.js (routing, rendering, build) | — | — |
-| Server logic | Route handlers / server actions | — | A separate backend service — that is `web-api` |
-| Styling | Tailwind CSS + shadcn/ui | — | — |
-| Client state | Zustand | — | — |
-| Server state | TanStack Query | — | — |
-| Database | Cloudflare D1 (SQLite) | PostgreSQL | — |
-| ORM | Drizzle | — | — |
-| Tests | Vitest + Playwright | — | — |
+| Framework | Next.js, App Router, `output: "standalone"` | — | Pages Router in new code; vinext or any other reimplementation of the Next.js API |
+| Server logic | Server components, server actions, route handlers | — | A separate backend service — that is `web-api` |
+| Styling | Tailwind CSS v4 + shadcn/ui | — | — |
+| Client state | None — React state and URL search params | Zustand, for state shared across distant client components | — |
+| Server state | None — data is read in server components | TanStack Query, for polling, infinite scroll, or optimistic updates | — |
+| Database | PostgreSQL. PGlite (Postgres compiled to WASM, in-process) for development and tests; Neon Free in production | — | SQLite and Cloudflare D1 — Drizzle schemas are written per engine, so one codebase holds one engine |
+| ORM | Drizzle, `drizzle-kit` migrations | — | Prisma |
+| Validation | Zod 4 | — | Hand-written parsing of request input |
+| Accounts | Better Auth, tables in the app's own database through its Drizzle adapter | — | Accounts held by a vendor's auth service (Clerk, Supabase Auth, Firebase Auth, Auth0); Auth.js / NextAuth for new projects |
+| Deploy artifact | Container image from a `Dockerfile` | — | Docker required for local development or tests |
+| Tests | Vitest — `node` for logic, browser mode in Chromium for client components; Playwright for whole pages | — | jsdom, happy-dom |
+
+**Why a Node server, not Cloudflare Workers.** The Workers Free plan stops a request at
+10 ms of CPU time and rejects a Worker larger than 3 MB compressed. Cloudflare's own
+documentation puts server rendering and authentication at 10–20 ms per request, and a
+Next.js bundle can cross 3 MB on an adapter upgrade alone. On the free plan an ordinary
+Next.js page fails at random; making it reliable costs a monthly fee. Next.js
+self-hosted as a Node server is supported by the Next.js project itself, so the same
+image runs on any host that runs a container. It also puts `web-ts` on the same host,
+database and backup procedure as `web-python`.
+
+**Why not vinext.** Cloudflare now recommends vinext for Next.js on Workers. It is a
+reimplementation of the Next.js API on Vite, not Next.js, released as 1.0 in September
+2026. It does not remove the Workers Free limits, and coding agents trained on Next.js
+cannot tell where its behaviour differs.
+
+**Why PGlite for development.** Drizzle has no engine-neutral schema, so the database
+must be PostgreSQL at every stage. PGlite is PostgreSQL in WASM, installed as an ordinary
+dependency: no server, no Docker, offline. CI also runs the database tests against a real
+PostgreSQL service container, which catches what PGlite does differently.
+
+**Why no client-state or data-fetching library by default.** With the App Router, a page
+reads its data on the server and sends finished HTML. A client cache or a global store
+duplicates that path. Each is added when a concrete need from the Alternative column
+appears.
+
+**Why Better Auth.** Password hashing, session rotation and login rate limiting are the
+code a one-person project can least afford to get wrong, and the least likely to be
+caught by tests. Better Auth stores accounts in the app's own tables, so the user data
+never leaves the project's database. The Auth.js team recommends it for new projects.
+Vercel acquired it in July 2026; it remains MIT-licensed. Its tables are ordinary
+Drizzle tables, so replacing it later is a data migration, not a vendor exit.
 
 ### 5.6 Web — Split
 
@@ -509,7 +544,7 @@ All selections below are free tiers that permit commercial use, except where not
 |---|---|---|---|
 | `web-static` | Cloudflare Workers, static assets only (no Worker script) | Netlify Free; GitHub Pages — public repository, non-commercial sites only | Workers Free: static asset requests free and unlimited; 20,000 files per deployment, 25 MiB per file. Netlify Free: 300 credits/month shared by deploys, bandwidth and requests; every site pauses until the next cycle when they run out. GitHub Pages: terms exclude online businesses, e-commerce and commercial SaaS |
 | `web-python` | Render (free web service) + Neon Free Postgres when the app keeps durable data | Oracle Cloud Always Free; **Streamlit Community Cloud — Track A, personal non-commercial practice only** | Render free: 512 MB RAM, sleeps after 15 min idle, about 1 min to wake. Neon Free: 1 GB per project, sleeps after 5 min idle and wakes on the next query |
-| `web-ts` | Cloudflare Workers | **Vercel — non-commercial projects only** | Cloudflare D1 provides free SQLite |
+| `web-ts` | Render (free web service) + Neon Free Postgres when the app keeps durable data | Oracle Cloud Always Free; **Vercel Hobby — personal non-commercial projects only** | Same limits as `web-python`. Cloudflare Workers Free is not listed: see §5.5 |
 | `web-api` | Cloudflare Pages (frontend) + Render (backend) + Neon Free Postgres when the backend keeps durable data | Oracle Cloud Always Free (both) | The only archetype spanning two platforms on free tiers |
 | Desktop | GitHub Releases | — | — |
 | Mobile | EAS Build → internal link → Google Play | — | — |
@@ -523,7 +558,7 @@ frontend; it is revisited when that archetype's rule is written.
 
 **Vercel.** Its free Hobby plan is restricted to non-commercial use. Any project that
 might be monetized MUST NOT depend on it. Cloudflare carries no such restriction, which is
-why it is the default here despite Vercel's first-party Next.js support.
+why it is not the default here despite Vercel's first-party Next.js support.
 
 **Durable data on free hosting.** Render's free web service loses its filesystem on every
 restart, redeploy, and spin-down, so a SQLite file or uploaded file kept there is lost.
@@ -705,13 +740,16 @@ and should move to `web-ts` or `web-api`.
 |---|---|---|
 | pnpm | System — standalone | Installed first. Exact version in `packageManager` |
 | Node.js LTS | Installed by pnpm | Version in `devEngines.runtime`. No separate Node installer |
-| wrangler | Project dependency | Also runs D1 locally; no separate database install |
-| Playwright browsers | Project | — |
-| Cloudflare account | Account | Free |
+| PGlite | Project dependency | The development and test database. No PostgreSQL install |
+| Chromium for tests | Project (`pnpm exec playwright install chromium`) | Downloaded once; tests then run offline |
+| Docker or Podman | System — optional | Local parity with the deployed container |
+| Render account | Account | Free tier sleeps after idle |
+| Neon account | Account — only when the app keeps durable data | Free, no card. Check terms and region first (§6) |
+| PostgreSQL client tools (`pg_dump`, `psql`) | System — only when the app keeps durable data | Major version at or above the server's |
 
 ### 9.7 Web — Split
 
-Everything in §9.5 (Track B backend) plus everything in §9.6, minus wrangler's D1 usage.
+Everything in §9.5 (Track B backend) plus the Node.js, pnpm and test rows of §9.6.
 Additionally:
 
 | Requirement | Scope | Note |
@@ -816,7 +854,7 @@ that. On a restricted or filtered network, the column that matters is the middle
 | `pc-app-electron` | Network | **Fully offline** | Local build; network only to upload the artifact |
 | `web-static` | Network | **Fully offline** | Network — the platform is the product |
 | `web-python` | Network | **Fully offline** | Network |
-| `web-ts` | Network | Offline, except `wrangler` features that proxy to Cloudflare | Network |
+| `web-ts` | Network | **Fully offline** | Network |
 | `web-api` | Network | **Fully offline** | Network |
 | `mobile` | Network, including Gradle's first dependency fetch | **Offline once the Gradle cache is warm** | Android: local. iOS: network |
 | `agent-plugin` | Network | **Fully offline** for the executable's own tests and the Inspector; **network to test the bundle**, since the host's model is a cloud service | Network |
