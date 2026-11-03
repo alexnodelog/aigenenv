@@ -57,18 +57,18 @@ modules** (what capabilities it has).
 | Web — TypeScript | `rules/web-ts.md` | Real app UI, and nothing forces Python on the server |
 | Web — Split | `rules/web-api.md` | Real app UI **and** Python needed on the server |
 | Mobile | `rules/mobile.md` | iOS / Android application |
-| Agent Plugin | `rules/agent-plugin.md` | The deliverable runs **inside an AI coding tool**: skills, agents, commands, hooks. No window or site of its own |
+| Agent Plugin | `rules/agent-plugin.md` | The deliverable is **installed into an AI coding tool**: skills, commands, hooks, a CLI, an MCP server, or several together |
 
 | Module | File | Adds |
 |---|---|---|
 | AI / RAG | `rules/module-ai-rag.md` | LLM, embedding, vector search **at runtime** |
 | Deployment | `rules/module-deployment.md` | Release automation, signing, distribution |
 
-**Agent Plugin against the others.** A plugin has no screen and no server; the AI coding
-tool that loads it is its runtime. If the project needs its own window, it is a PC app. If
-it needs its own site or API, it is a web archetype. If the deliverable is a running
-program with no interface of its own — a CLI tool, an MCP server — no archetype covers it
-yet; add one when a real project needs it rather than stretching this one.
+**Agent Plugin against the others.** Pick it when the thing being built is installed into
+an AI coding tool and used through it — skills and commands, a CLI the user or the model
+runs, an MCP server, or all of these from one repository. It has no window and no site of
+its own. If the project needs its own window, it is a PC app; if it needs its own site or
+API, it is a web archetype.
 
 **Decision order for web projects.** Start at the top and stop at the first "yes":
 
@@ -418,36 +418,37 @@ Target floor: Android 7+, iOS 16.4+.
 
 ### 5.8 Agent Plugin
 
-The deliverable is instructions an AI coding tool loads and follows. It is Markdown. The
-host tool is the runtime, so there is no build, no bundle, and nothing to compile.
+The deliverable is **installed into an AI coding tool** rather than run on its own. It has up
+to three components, and a project takes only the ones it needs.
+
+| Component | When |
+|---|---|
+| **A. Instruction bundle** | Always. Skills, agents, commands, hooks — Markdown the host reads |
+| **B. Executable** | Only when instructions cannot do the work: a CLI, an MCP server, or both from one codebase |
+| **C. Distribution** | Always. How a user installs A, B, or both |
+
+**The dividing line.** A skill tells the host's model what to do with what it already has.
+An executable is needed when the capability itself does not exist in the host: parsing a
+binary file format, OCR, a network API with authentication, anything requiring a library.
+Most requests that sound like "add a small MCP server" are one skill.
+
+**The preferred shape when both exist.** The program does the work and is published to a
+package registry. The skill stays thin and invokes it (`npx -y <pkg>`, `uvx <pkg>`). The
+plugin is a subdirectory of the program's repository with its own manifest. This keeps one
+codebase, one release, and a bundle that still works when the program is absent — it can
+say so instead of failing.
+
+#### A. Instruction bundle
 
 | Category | Default | Alternative | Prohibited |
 |---|---|---|---|
 | Content format | Markdown with YAML front matter. Every command, skill, agent, and hook file carries at least a `description` — a missing one produces load errors | — | Instructions embedded in code strings |
 | Layout | Components at the plugin root: `skills/<name>/SKILL.md`, `agents/`, `commands/`, `hooks/`. Only the manifest sits in `.claude-plugin/plugin.json` | — | **Components inside `.claude-plugin/`** — the host reads that directory as manifest only |
-| Host manifests | The Claude Code manifest is canonical; manifests for other hosts are generated from it | One manifest, when only one host is supported | Hand-maintained copies that drift |
-| MCP server registration | Declaring an existing server the plugin makes available, through the plugin's MCP configuration | — | — |
-| MCP server implementation | — | — | **Prohibited in this archetype.** A server is a running program, not instructions a host reads. If one is genuinely needed it is a separate deliverable on its own stack, and the reason is recorded in `DECISIONS.md` |
-| Scripts | **None.** Markdown only | TypeScript or Python from the Common Stack. For a script that must run *before* any runtime exists: PowerShell on Windows and POSIX `sh` elsewhere, as a matched pair, with the reason recorded | A script where a skill is enough |
+| Host manifests | The Claude Code manifest is canonical; manifests for other hosts are generated from it | One manifest when only one host is supported | Hand-maintained copies that drift |
 | Hooks | Hooks check, block, and log | — | A hook that auto-approves a tool call |
+| Bootstrap scripts | **None.** Markdown only | For a script that must run *before* any runtime exists: PowerShell on Windows and POSIX `sh` elsewhere, as a matched pair, with the reason recorded | A script where a skill is enough |
 | Validation | `claude plugin validate <path> --strict`, plus a check that every front matter block and internal link resolves | — | Releasing without validation |
 | Behaviour tests | **Scenario records**: for each skill, a fixed request and the expected behaviour, written down and re-run on each supported host | — | "It worked in my session" with no record |
-| Secrets | None. Hooks and scripts neither read nor write credentials | — | Tokens in plugin files |
-| Distribution | A GitHub repository with `.claude-plugin/marketplace.json` at its root | An `npx` installer for hosts with no plugin system, which adds a Node.js requirement | Distributing files by hand |
-| Documentation | README stating the prerequisite (an AI coding tool), the supported hosts, and each host's install command | — | Install steps only in a wiki |
-
-**Why Markdown first.** A skill is read and followed by the host's model. It needs no
-runtime, no build, and no dependencies, so it cannot fail to install. Every script adds a
-runtime requirement the user's machine may not meet.
-
-**Why registration is allowed and implementation is not.** Registering an MCP server is a
-few lines of configuration pointing at something that already exists. Implementing one
-means shipping a process with transports, dependencies, and a lifecycle — a program the
-host launches alongside the plugin, not instructions it loads. Most requests that look
-like "add a small MCP server" are satisfied by one skill.
-
-**Why no hook may approve.** A hook that approves tool calls removes the human from the
-loop, which is the one thing this framework will not trade away.
 
 **Folder name to check.** At least one host treats a root `rules/` directory as its own
 rule location. A plugin storing rule files there MUST confirm no supported host claims the
@@ -459,6 +460,44 @@ record per host.
 
 Scenario records are integration tests: they need a live host and are not deterministic, so
 they are excluded from the default test run.
+
+#### B. Executable — CLI and MCP server
+
+One codebase. The CLI and the MCP server are two front doors onto the same core functions,
+which know about neither.
+
+| Category | Default | Alternative | Prohibited |
+|---|---|---|---|
+| Language | TypeScript on Node.js LTS — `npx` makes it runnable with nothing installed | Python, when the work needs Python libraries; run with `uvx` | A language the target users cannot run without a toolchain |
+| MCP SDK (TypeScript) | `@modelcontextprotocol/server` (SDK v2) | `@modelcontextprotocol/sdk` (v1) for an existing server; it receives fixes for at least six months past the v2 release | Framework wrappers adopted before the official SDK proves insufficient |
+| MCP SDK (Python) | `mcp`, which includes FastMCP | — | — |
+| Transport | **stdio** — local, subprocess-isolated, what an AI coding tool launches | Streamable HTTP, only for a server that must be remote | Legacy HTTP+SSE |
+| Tool surface | Few tools, each doing one thing, with descriptions written for a model to choose between | — | Exposing every internal function as a tool |
+| Secrets | From the environment. stdio servers inherit them from the host's configuration | OAuth 2.1 for a remote HTTP server | Credentials in the server's config file or its repository |
+| Filesystem reach | Only paths the caller passes in | — | Reading or writing outside them without being asked |
+| Offline operation | An environment switch that disables all outbound traffic | — | Silent network calls from a tool the user believes is local |
+| Testing | pytest or Vitest against the core functions, which are plain code | `npx @modelcontextprotocol/inspector` for manual tool checks | Testing only through the host's model |
+| Optional heavy dependencies | Declared optional, with the feature degrading and saying so when absent | — | A multi-hundred-megabyte install that every user pays for |
+
+**Why stdio is the default.** An AI coding tool launches the server as a subprocess on the
+same machine. There is no port, no origin, and no authorization layer to get wrong, and the
+process dies with the client.
+
+**Why the core is separate from both front doors.** The same functions serve the CLI, the
+MCP tools, and the tests. Only the adapters know about argument parsing or JSON-RPC — §8
+applies here as it does anywhere else.
+
+#### C. Distribution
+
+| Category | Default | Alternative | Prohibited |
+|---|---|---|---|
+| Bundle | GitHub repository with `.claude-plugin/marketplace.json` at its root | Listing in a third-party marketplace, in addition | Distributing files by hand |
+| Executable | npm for TypeScript, PyPI for Python, runnable with `npx` / `uvx` and no prior install | — | Install instructions that require cloning and building |
+| MCP discovery | An entry in the official MCP registry | — | — |
+| Client registration | A `setup` command that writes the MCP configuration for whichever clients are installed | Documented manual configuration per client | Editing a client's config without saying what changed |
+| Versioning | Semantic Versioning, Git tags, from Conventional Commits. The bundle pins the executable to a major range | — | A skill pinned to `latest` |
+| Documentation | README stating the prerequisite, the supported hosts, each host's install command, and the manual fallback | — | Install steps only in a wiki |
+| Secrets | None anywhere in the bundle | — | Tokens in plugin files |
 
 ---
 
@@ -474,7 +513,7 @@ All selections below are free tiers that permit commercial use, except where not
 | `web-api` | Cloudflare Pages (frontend) + Render (backend) + Neon Free Postgres when the backend keeps durable data | Oracle Cloud Always Free (both) | The only archetype spanning two platforms on free tiers |
 | Desktop | GitHub Releases | — | — |
 | Mobile | EAS Build → internal link → Google Play | — | — |
-| `agent-plugin` | GitHub repository, used directly as the marketplace source | — | No hosting service involved. Public repository is enough; no terms restrict a plugin repository's use |
+| `agent-plugin` | GitHub repository as the marketplace source; npm or PyPI for an executable; the official MCP registry for a server | — | No hosting service and no account cost. Publishing to npm, PyPI, and the MCP registry is free |
 
 **Cloudflare Workers, not Pages.** Cloudflare directs new projects to Workers static
 assets and adds new features only there; Pages keeps working but is no longer the target.
@@ -714,13 +753,16 @@ for iOS the cloud build is the only option short of buying a Mac.
 | Requirement | Scope | Note |
 |---|---|---|
 | Base items in §9.1 | As listed | — |
-| Each supported host tool | System, one per host | Needed to test the plugin, and each carries its own account or subscription for its model |
-| Node.js LTS, pnpm | System — only if scripts are TypeScript or an `npx` installer is published | As in §9.6 |
+| Each supported host tool | System, one per host | Needed to test the bundle, and each carries its own account or subscription for its model |
+| Node.js LTS, pnpm | System — required for a TypeScript executable | As in §9.6. Also needed by the MCP Inspector regardless of the server's language |
+| npm account | Account — publishing a TypeScript executable | Free |
+| PyPI account | Account — publishing a Python executable | Free |
+| MCP Inspector | Run via `npx`, not installed | Manual tool checks against a local server |
 | PowerShell / POSIX `sh` | Included with the OS | Only for the pre-runtime bootstrap case |
-| OS build toolchain | **None** | Nothing is compiled |
+| OS build toolchain | **None**, unless a dependency ships native code | Native modules fall back to §9.3's requirements |
 
-The lightest archetype to set up and the heaviest to test: verifying behaviour means running
-a real session on every host the plugin claims to support.
+Lightest archetype to set up, heaviest to test: verifying behaviour means running a real
+session on every host the plugin claims to support.
 
 ### 9.10 Modules
 
@@ -777,7 +819,7 @@ that. On a restricted or filtered network, the column that matters is the middle
 | `web-ts` | Network | Offline, except `wrangler` features that proxy to Cloudflare | Network |
 | `web-api` | Network | **Fully offline** | Network |
 | `mobile` | Network, including Gradle's first dependency fetch | **Offline once the Gradle cache is warm** | Android: local. iOS: network |
-| `agent-plugin` | Network | Offline for validation; **network to test**, since the host's model is a cloud service | Network |
+| `agent-plugin` | Network | **Fully offline** for the executable's own tests and the Inspector; **network to test the bundle**, since the host's model is a cloud service | Network |
 | AI/RAG module | Network for model download | **Fully offline with Ollama** | — |
 
 Two rules follow from this table.
