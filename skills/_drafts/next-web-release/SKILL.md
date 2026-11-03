@@ -5,8 +5,8 @@ description: Set up, build, deploy and roll back a web-ts project (Next.js stand
 
 # next-web-release
 
-Items marked **[verify]** were not confirmed against the installed CLI. Confirm them in
-step 7 of the framework build before this skill leaves `_drafts/`.
+Items marked **[verify]** were not confirmed against the installed CLI. This draft leaves
+`_drafts/` only when none remain.
 
 ## 1. First setup on a developer machine
 
@@ -16,7 +16,9 @@ step 7 of the framework build before this skill leaves `_drafts/`.
 4. Copy `.env.example` to `.env.local`. Set `DATABASE_URL=pglite:./.data/dev` **[verify the
    URL form `client.ts` parses]**, `BETTER_AUTH_SECRET` from `openssl rand -base64 32`,
    `BETTER_AUTH_URL=http://localhost:3000`. `.data/` and `.env.local` are gitignored.
-5. `pnpm db:migrate`, then `pnpm dev`.
+5. `pnpm db:migrate`, then `pnpm dev`. `db:migrate` runs `src/adapters/db/migrate.ts`
+   against `DATABASE_URL` — the same entry the container runs at start. It applies only
+   pending migrations and exits non-zero on failure.
 
 ## 2. New project skeleton
 
@@ -42,7 +44,7 @@ step 7 of the framework build before this skill leaves `_drafts/`.
    **[verify flag]**, then `pnpm exec drizzle-kit generate`. Read the SQL before committing.
 9. Vitest: two projects — `unit` (`environment: "node"`, `tests/unit`, `tests/adapters`) and
    `browser` (`@vitest/browser-playwright`, Chromium, `tests/browser`, `vitest-browser-react`).
-10. Playwright: `webServer` runs `pnpm start` on the built app with a temp PGlite
+10. Playwright, after `pnpm build`: `webServer` runs `pnpm start` on the built app with a temp PGlite
     `DATABASE_URL` and placeholder secrets.
 
 ## 3. Dockerfile shape
@@ -87,23 +89,30 @@ Check the image size and that `.env*` is absent: `docker run --rm <image> ls -a`
 2. CI runs every check (§5.5 of the rule). If the tag adds a file under `drizzle/` since the
    previous tag, CI stops before deploying and says so.
 3. Migration release only — the human:
-   1. `pg_dump --format=custom --no-owner "$DIRECT_URL" > backup-<tag>.dump` using Neon's
-      **direct** (not pooled) URL.
+   1. Record the row counts of the main tables, then
+      `pg_dump --format=custom --no-owner "$DIRECT_URL" > backup-<tag>.dump` with Neon's
+      **direct** (not pooled) URL, held on the human's machine only.
    2. Restore into an empty database (a Neon branch or local PostgreSQL):
-      `pg_restore --no-owner -d "$EMPTY_URL" backup-<tag>.dump`; check row counts of the
-      main tables.
+      `pg_restore --no-owner -d "$EMPTY_URL" backup-<tag>.dump`; the restored row counts
+      match the recorded ones.
    3. Trigger the deploy hook by hand.
 4. After deploy: `/api/health` reports the tagged version; `/` answers 200; sign in once.
 
 ## 7. Scheduled backup
 
+Only for an app holding data its users cannot recreate (rule §4.3).
+
 GitHub Actions workflow on a schedule: install the PostgreSQL client at or above the
-server's major, `pg_dump` with the direct URL from a secret, upload the dump to the chosen
+server's major, `pg_dump` with Neon's direct URL from the secret `BACKUP_DATABASE_URL` —
+set on the backup job's environment only, never on the app or another job — upload the dump to the chosen
 off-Neon store, fail the job on any non-zero exit. The store and retention are an ADR.
 
 ## 8. Rollback
 
 1. Redeploy the previous tag through the host.
 2. If a migration ran since that tag, the old code may not run on the new schema. Stop and
-   decide with the human: restore the pre-deploy dump, or fix forward with a new migration.
+   decide with the human: fix forward with a new migration, or restore the pre-deploy dump.
+   Restoring discards every write made since the dump. Before choosing it, dump the
+   current database, state what the restore would lose, and get the human's explicit
+   approval of that loss.
 3. After rollback, repeat the post-deploy checks of §6.4.
