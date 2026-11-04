@@ -18,7 +18,10 @@ Items marked **[verify]** were not confirmed against the installed CLI. This dra
    `BETTER_AUTH_URL=http://localhost:3000`. `.data/` and `.env.local` are gitignored.
 5. `pnpm db:migrate`, then `pnpm dev`. `db:migrate` runs `src/adapters/db/migrate.ts`
    against `DATABASE_URL` — the same entry the container runs at start. It applies only
-   pending migrations and exits non-zero on failure.
+   pending migrations and exits non-zero on failure. Script:
+   `"db:migrate": "node --env-file-if-exists=.env.local src/adapters/db/migrate.ts"`
+   **[verify: Node runs the `.ts` file by type stripping, so `migrate.ts` may import only
+   packages and relative paths with `.ts` extensions — no `@/` aliases]**.
 
 ## 2. New project skeleton
 
@@ -54,8 +57,10 @@ Multi-stage. Base: `node:<major>-<variant>@sha256:<digest>`.
 1. **deps** — install pnpm at the `packageManager` version; `pnpm install --frozen-lockfile`.
 2. **build** — `NEXT_TELEMETRY_DISABLED=1 pnpm build` with no secrets in the environment.
 3. **run** — copy `.next/standalone/`, then `public/` → `./public` and `.next/static/` →
-   `./.next/static`; copy `drizzle/` and the compiled `migrate` entry **[verify how
-   `migrate.ts` is compiled into the standalone image]**; `USER node`;
+   `./.next/static`; copy `drizzle/` and `src/adapters/db/migrate.ts`, and make sure Drizzle's migrator and
+   the `pg` driver resolve from the run stage — standalone output keeps only the files
+   the app itself traces **[verify which install or copy achieves this]**. The smoke test
+   proves it: the image must migrate an empty database before health turns 200; `USER node`;
    `ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0`;
    `CMD` runs migrate, then `node server.js`.
 
@@ -93,8 +98,11 @@ Check the image size and that `.env*` is absent: `docker run --rm <image> ls -a`
       `pg_dump --format=custom --no-owner "$DIRECT_URL" > backup-<tag>.dump` with Neon's
       **direct** (not pooled) URL, held on the human's machine only.
    2. Restore into an empty database (a Neon branch or local PostgreSQL):
-      `pg_restore --no-owner -d "$EMPTY_URL" backup-<tag>.dump`; the restored row counts
-      match the recorded ones.
+      `pg_restore --no-owner --exit-on-error -d "$EMPTY_URL" backup-<tag>.dump`; the
+      restored row counts match the recorded ones. If they differ, users wrote during the
+      dump: suspend the service on the host, and repeat from step 1.
+   3. The dump holds password hashes and personal data. Keep it encrypted, or delete it
+      once the release is confirmed.
    3. Trigger the deploy hook by hand.
 4. After deploy: `/api/health` reports the tagged version; `/` answers 200; sign in once.
 
@@ -104,15 +112,20 @@ Only for an app holding data its users cannot recreate (rule §4.3).
 
 GitHub Actions workflow on a schedule: install the PostgreSQL client at or above the
 server's major, `pg_dump` with Neon's direct URL from the secret `BACKUP_DATABASE_URL` —
-set on the backup job's environment only, never on the app or another job — upload the dump to the chosen
-off-Neon store, fail the job on any non-zero exit. The store and retention are an ADR.
+set on the backup job's environment only, never on the app or another job. Encrypt the
+dump with the public key named in the ADR (the private key is never in CI or in the store),
+upload it to the chosen off-Neon store, fail the job on any non-zero exit. Confirm once
+that a failed run notifies the human **[verify GitHub's notification for scheduled
+workflows]**, and restore an encrypted dump once end to end. Store, retention and key
+location are an ADR.
 
 ## 8. Rollback
 
-1. Redeploy the previous tag through the host.
-2. If a migration ran since that tag, the old code may not run on the new schema. Stop and
-   decide with the human: fix forward with a new migration, or restore the pre-deploy dump.
-   Restoring discards every write made since the dump. Before choosing it, dump the
-   current database, state what the restore would lose, and get the human's explicit
-   approval of that loss.
-3. After rollback, repeat the post-deploy checks of §6.4.
+1. Check first whether `drizzle/` changed between the previous tag and the deployed one.
+2. No change: redeploy the previous tag through the host.
+3. Changed: do not redeploy yet — the old code may not run on the new schema. Decide with
+   the human: fix forward with a new migration, or restore the pre-deploy dump and then
+   redeploy the previous tag. Restoring discards every write made since the dump. Before
+   choosing it, dump the current database, state what the restore would lose, and get the
+   human's explicit approval of that loss.
+4. After rollback, repeat the post-deploy checks of §6.4.

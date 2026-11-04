@@ -23,11 +23,11 @@ Python libraries (`web-api`), or if one person uses it on one machine with local
 | Packaging | pnpm, standalone install, exact version in `package.json` `packageManager`; `pnpm-lock.yaml` | — | npm, yarn, bun; Corepack; `npx` in scripts or docs |
 | Language | TypeScript, `strict: true`, ES modules | — | Plain JavaScript in new code |
 | Framework | Next.js 16, App Router, `output: "standalone"`, Node.js runtime | — | Pages Router; `output: "export"` (that is `web-static`); the Edge runtime (`runtime = "edge"`); OpenNext, vinext, or any adapter that runs the app outside a Node server |
-| Styling | Tailwind CSS v4 via `@tailwindcss/postcss`; shadcn/ui, Radix base, copied into `src/components/ui/` | Plain CSS | `tailwind.config.js`, `@tailwind` directives; CSS-in-JS; component libraries installed as packages (MUI, Chakra, Mantine, Ant Design) |
+| Styling | Tailwind CSS v4 via `@tailwindcss/postcss`; shadcn/ui, Radix base, copied into `src/components/ui/` | Plain CSS | `tailwind.config.js`, `@tailwind` directives; CSS-in-JS; full component kits installed as packages (MUI, Chakra, Mantine, Ant Design) |
 | Client state | None — `useState`, `useReducer`, URL search params | Zustand, for state shared by distant client components | Redux, Redux Toolkit |
 | Server data | Read in server components; changed by server actions | TanStack Query, for polling, infinite scroll, or optimistic updates | SWR; `useEffect` + `fetch` to load a page's data |
 | Validation | Zod 4 (4.6.6 or later) | — | Unvalidated `FormData` or JSON reaching a use case |
-| Persistence | PostgreSQL via Drizzle. `pg` (node-postgres) in production; PGlite (`@electric-sql/pglite`) in development and tests | — | SQLite, Cloudflare D1; Prisma; a vendor-specific driver (`@neondatabase/serverless`); `sql.raw` with any value from input |
+| Persistence | PostgreSQL via Drizzle, its stable release line. `pg` (node-postgres) in production; PGlite (`@electric-sql/pglite`) in development and tests | — | A Drizzle beta or release candidate; SQLite, Cloudflare D1; Prisma; a vendor-specific driver (`@neondatabase/serverless`); `sql.raw` with any value from input |
 | Migrations | `drizzle-kit generate`, SQL files in `drizzle/`, committed | — | `drizzle-kit push`; editing a shipped migration; hand-applied schema changes |
 | Accounts | Better Auth: email and password, database sessions, Drizzle adapter | — | A vendor's auth service (Clerk, Auth0, Supabase Auth, Firebase Auth); Auth.js / NextAuth; Better Auth `session.cookieCache`; JWT browser sessions; tokens in `localStorage` |
 | User file uploads | None | Storage chosen by ADR | The container's filesystem |
@@ -81,7 +81,7 @@ Python libraries (`web-api`), or if one person uses it on one machine with local
 │   ├── app/              routes: page, layout, error, actions.ts beside the route;
 │   │                     api/auth/[...all]/route.ts, api/health/route.ts; globals.css
 │   ├── components/       app components; ui/ = shadcn/ui source
-│   ├── instrumentation.ts  register(): loads config at server start
+│   ├── instrumentation.ts  register(): calls server.ts once at server start
 │   ├── config.ts         the only reader of process.env
 │   ├── server.ts         composition root: builds the pool, adapters, services
 │   ├── domain/           pure TypeScript
@@ -91,11 +91,15 @@ Python libraries (`web-api`), or if one person uses it on one machine with local
 └── .next/                gitignored
 ```
 
-- `src/server.ts` is the only module that reads `config.ts`, creates the connection pool,
+- `src/server.ts` is the only module that imports `config.ts`, creates the connection pool,
   and constructs adapters and services. It builds them once per process and exports a
   function that returns them. Route files call that function; they construct nothing.
 - `server.ts`, `config.ts` and everything in `adapters/` start with `import "server-only"`.
   A client component that reaches any of them fails the build.
+- `adapters/db/migrate.ts` is the one exception to both rules above. It runs under plain
+  Node, outside Next.js, so it has no `server-only` import, reads `DATABASE_URL` itself,
+  and imports only Drizzle's migrator and the two drivers. `pnpm db:migrate` and the
+  container run this same file.
 - An app with no business rules MAY omit `domain/` and `services/`, and MUST NOT add them
   to match this layout. A new top-level dir needs an ADR only if it changes a row of the
   import table below.
@@ -149,12 +153,12 @@ Python libraries (`web-api`), or if one person uses it on one machine with local
 
 ### 4.2 Paths
 
-- Every URL is a route under `src/app/`. A published URL is a contract: renaming one adds
+- Every page and API URL is a route under `src/app/`. A published URL is a contract: renaming one adds
   a permanent entry to `redirects()` in `next.config.ts` in the same commit.
 - An unknown path answers 404 through `not-found.tsx`, never a redirect to the home page.
 - The app writes no files at runtime. Next.js's own `.next/cache` is the only exception
   and is lost on every restart.
-- Everything in `public/` is served to anyone.
+- Everything in `public/` is served to anyone, at its own path.
 
 ### 4.3 Persistence
 
@@ -168,9 +172,9 @@ Python libraries (`web-api`), or if one person uses it on one machine with local
   tests and the migrations against a PostgreSQL service container, and a migration MUST
   pass on both. A local PostgreSQL MAY be used but MUST NOT be required.
 - One pool per process, created in `server.ts`, sized for Neon Free's connection limit
-  and pointed at Neon's pooled endpoint. Every connection attempt and every statement has a
-  timeout — the pool's connection timeout and PostgreSQL `statement_timeout` — long enough
-  that the first query after Neon has slept is slow, not failed.
+  and pointed at Neon's pooled endpoint. The pool's connection timeout and PostgreSQL
+  `statement_timeout` are both set, 10 s each unless an ADR names other values, so the
+  first query after Neon has slept is slow, not failed, and no query hangs a request.
 - A use case that writes more than once runs those writes in one `db.transaction`. A
   failed action leaves no partial write.
 - Migrations are generated by `drizzle-kit generate`, then read and corrected by hand
@@ -179,6 +183,8 @@ Python libraries (`web-api`), or if one person uses it on one machine with local
 - Better Auth's tables are generated by its CLI into `adapters/db/auth-schema.ts`,
   committed, and never edited by hand. A change to the Better Auth configuration or its
   plugins regenerates that file in the same commit, followed by `drizzle-kit generate`.
+- An app with no database has no `migrate.ts` and no `drizzle/`; its health check reports
+  the version only.
 - `adapters/db/migrate.ts` runs at container start, before the server. On failure it exits
   non-zero, the server does not start, and the database is left at its previous migration.
   A database holding migrations the code does not know → refuse to start, log why.
@@ -187,15 +193,19 @@ Python libraries (`web-api`), or if one person uses it on one machine with local
   this. Neon's point-in-time restore is not the backup.
 - An app holding data its users cannot recreate MUST take a backup on a schedule and keep
   it off Neon. A restore from that backup into an empty database MUST have succeeded once
-  before the app holds real data. A failed backup run MUST fail a scheduled CI job.
-  Schedule and method are recorded in `DECISIONS.md`.
-- Shipped migrations are append-only. Fixes are new migrations.
+  before the app holds real data. Backups are encrypted before they leave the
+  CI job, with a key kept apart from the store that holds them. A failed backup run MUST
+  fail a scheduled CI job whose failure notification reaches the human. Schedule, store
+  and key location are recorded in `DECISIONS.md`.
+- Shipped migrations are append-only: a migration's SQL and snapshot, once on `main`,
+  are never modified or deleted, and generated metadata such as `meta/_journal.json`
+  only gains entries at its end. Fixes are new migrations.
 
 ### 4.4 Settings, credentials, errors
 
 - `src/config.ts` builds a frozen settings object from `process.env`, validated with Zod.
-  `instrumentation.ts` loads it in `register()`, so a missing or invalid variable stops the
-  server at start with a message naming the variable, never its value.
+  `instrumentation.ts` calls `server.ts` in `register()`, so a missing or invalid variable
+  stops the server at start with a message naming the variable, never its value.
 - `next build` MUST succeed without `DATABASE_URL` or any secret. A page that would read
   the database or a secret at build time renders per request instead.
 - `NEXT_PUBLIC_*` values are compiled into the browser bundle at build time and are never
@@ -249,7 +259,8 @@ Procedure: skill `next-web-release`.
   through `@tailwindcss/postcss`.
 - The image copies the standalone output together with `public/` and `.next/static/` —
   standalone output omits both — installs nothing at runtime, runs as a non-root user,
-  sets `NEXT_TELEMETRY_DISABLED=1`, runs `migrate.ts`, then `node server.js` on `0.0.0.0`
+  sets `NEXT_TELEMETRY_DISABLED=1`, runs `migrate.ts` (if the app has a database), then
+  `node server.js` on `0.0.0.0`
   and the port the host passes in `PORT`.
 - A project that will be deployed deploys a walking skeleton — one page, sign-in, the
   health check, the real host and database — before any feature beyond it is built.
@@ -259,7 +270,7 @@ Procedure: skill `next-web-release`.
 
 `GET /api/health` answers 200 with the version from `package.json` and the latest applied
 migration when the database answers and is at the code's latest migration; 503 otherwise.
-It reveals nothing else.
+It reveals nothing else. An app with no database reports the version only (§4.3).
 
 The smoke test (`tests/smoke/`) starts the built image against an empty PostgreSQL
 database, waits for health, and exits 0 — or non-zero naming each failure. It checks that:
@@ -292,8 +303,8 @@ It uses a fresh database and test placeholders for every secret. Timeouts: healt
 ### 5.5 CI
 
 - Push / PR: `pnpm install --frozen-lockfile`, Biome, both type checks, Vitest in Node and
-  Chromium including the boundary check; a failure if any file under `drizzle/` that exists
-  on `main` was modified or deleted; `drizzle-kit check` and a `drizzle-kit generate`
+  Chromium including the boundary check; a failure if the change breaks the append-only rule
+  of §4.3 — new migration files and new journal entries pass; `drizzle-kit check` and a `drizzle-kit generate`
   that produces no new file, the adapter tests and migrations against a PostgreSQL service
   container, `pnpm build`, Playwright against the built app, then the smoke test against
   the built image.
@@ -325,6 +336,9 @@ right use case and the result is shown — not the rule itself.
   tested without one; one limited to the owner of the data is tested as another user; one
   limited to a role is tested without it — each is refused. A public action is tested
   without a session and succeeds.
+- Route handlers: the health check is tested without credentials and succeeds; a handler
+  for non-browser callers is tested without and with wrong credentials, and both are
+  refused. The Better Auth mount is covered by the Playwright sign-up and sign-in flow.
 - Controls are found by role and label text, never by CSS selector or id.
 - Assert what the user sees: text, `disabled`, `aria-invalid`, the URL after a redirect.
 - One test submits input containing markup and asserts it comes back as text.
@@ -349,7 +363,11 @@ around a prohibition when something does not work.
 4. Copying the testing setup from the Next.js documentation, which uses jsdom and
    `@testing-library/react`. Here client components run in real Chromium through
    `vitest-browser-react`, whose `render` is awaited.
-5. Moving a page to the Edge runtime, or the app to Cloudflare Workers or Vercel, to escape
+5. Drizzle v1 release-candidate idioms in a project on the stable line, or the reverse:
+   `defineRelations()`, one folder per migration with no `meta/_journal.json`. Check the
+   installed `drizzle-orm` major and the shape of `drizzle/` before writing relations or
+   migration tooling.
+6. Moving a page to the Edge runtime, or the app to Cloudflare Workers or Vercel, to escape
    a cold start or a slow page. That is a change of hosting, which needs an ADR, not a
    workaround.
 
@@ -362,7 +380,7 @@ Every task here:
 - [ ] Boundary check (§3) passes
 - [ ] No server data reaches a client component beyond the fields it displays
 - [ ] Every new or changed server action and route handler validates its input and has
-      the refusal tests of §6
+      the access tests of §6
 
 Schema change:
 
