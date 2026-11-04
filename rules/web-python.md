@@ -214,10 +214,13 @@ Track B — one request, one thread from Uvicorn's pool.
   §5.4 stops CI for this. The provider's point-in-time restore is not the backup.
 - An app holding data its users cannot recreate MUST take a backup on a schedule and keep
   it off the database host. A restore from that backup into an empty database MUST have
-  succeeded once before the app holds real data. A failed backup run MUST fail a scheduled
-  CI job, not only write a log line. Schedule and method are recorded in `DECISIONS.md`.
+  succeeded once before the app holds real data. Backups are encrypted before they leave the CI
+  job, with a key kept apart from the store that holds them. A failed backup run MUST fail a
+  scheduled CI job whose failure notification reaches the human. Schedule, store and key
+  location are recorded in `DECISIONS.md`.
 - A database at a revision the code does not know → refuse to start, log why.
-- Shipped revisions are append-only. Fixes are new revisions.
+- Shipped revisions are append-only: a file under `migrations/versions/`, once on `main`,
+  is never modified or deleted. Fixes are new revisions.
 
 ### 4.4 Settings, credentials, errors
 
@@ -309,17 +312,20 @@ stops the container, and exits 0 — or non-zero with the reason.
 - `version` in `pyproject.toml` is the single source; `/healthz`, the image tag and the Git
   tag read it. CI fails a tag that does not match.
 - Auto-deploy on push is off. CI triggers the host's deploy for the tagged commit after
-  every check passes — except when the tag adds an Alembic revision since the previous tag.
+  every check passes — except when anything under `migrations/versions/` differs from the previous
+  tag.
   CI then stops before deploying, and the human deploys after the backup in §4.3. Container
   start runs migrations, so this stop is what makes the migration a Blocking step rather
   than a written intention.
-- Rollback is a redeploy of the previous tag.
+- Rollback redeploys the previous tag, and only when nothing under `migrations/versions/`
+  changed since it; otherwise the human decides first (`GLOBAL_RULES.md` §12).
 - `README.md` tells users the first visit after idle may be slow.
 
 ### 5.5 CI
 
 - Push / PR: `uv sync --locked`, Ruff, mypy, pytest offline including the boundary check,
-  `alembic check` if the app persists data. A PostgreSQL project adds the adapter tests and
+  `alembic check` and a failure if a revision file that exists on `main` was modified or
+  deleted, if the app persists data. A PostgreSQL project adds the adapter tests and
   migrations against a PostgreSQL service container. Track B regenerates the stylesheet and
   fails on any diff. Then the smoke test — against the built image, or against `uv run` on
   a native-runtime host.
