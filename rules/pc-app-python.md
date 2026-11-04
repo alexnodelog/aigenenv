@@ -137,7 +137,9 @@ archetype), or if there is no window (a script).
 - A failed migration: roll back, keep original and backup, do not advance `user_version`,
   refuse to open, and offer the user a way to open the backup's folder.
 - `user_version` higher than the app supports → refuse to open, tell the user to update.
-- Shipped migrations are append-only. Fixes are new migrations.
+- Shipped migrations are append-only. Fixes are new migrations. A test records a checksum
+  of every shipped migration and fails if one changes; a new migration adds its checksum in
+  the release that ships it.
 
 ### 4.4 Settings, credentials, errors
 
