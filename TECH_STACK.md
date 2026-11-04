@@ -79,9 +79,9 @@ API, it is a web archetype.
    SDK)? No → `web-ts`. Yes → continue.
 4. → `web-api`.
 
-Choose `web-api` only after answering yes to step 3. It is the only archetype whose free
-hosting spans two platforms, and every CORS problem, cold-start problem, and
-duplicated deploy pipeline in this framework originates there.
+Choose `web-api` only after answering yes to step 3. It is the only archetype with two
+toolchains — uv and pnpm — and two test stacks in one repository, and every task in it
+pays for both.
 
 **AI at build time is not a module.** Using Claude, Cursor, or Copilot to write the code is
 universal and belongs to `GLOBAL_RULES.md`. The AI/RAG module applies only when the
@@ -392,37 +392,47 @@ Drizzle tables, so replacing it later is a data migration, not a vendor exit.
 
 ### 5.6 Web — Split
 
-Next.js frontend, FastAPI backend, deployed separately. Backend is identical to §5.4
-Track B minus the templates.
+A Next.js frontend built as a static export, and a FastAPI backend that serves both that
+export and the API, from one container. The backend is §5.4 Track B without templates,
+htmx, or the Tailwind standalone CLI. The frontend uses the toolchain of §5.5 without a
+Node server.
 
 | Category | Default | Alternative | Prohibited |
 |---|---|---|---|
 | UI library | React | — | — |
-| Frontend framework | Next.js | — | — |
-| Backend | FastAPI | — | — |
+| Frontend framework | Next.js, App Router, `output: "export"` | — | A Next.js server (`output: "standalone"`) beside the backend; Pages Router in new code |
+| Styling | Tailwind CSS v4 + shadcn/ui | — | — |
+| Backend | FastAPI, serving `/api/v1` and the exported files | — | — |
 | API boundary | Versioned prefix `/api/v1` | — | Unversioned public API |
 | Client types | Generated from OpenAPI via `openapi-typescript` | — | Hand-maintained duplicate types |
-| Frontend → backend wiring | Same-origin proxy (see below) | Direct cross-origin call with an explicit CORS allowlist | Hard-coded backend URLs in source |
-| Auth tokens | HTTP-only cookies, same-origin | Bearer tokens in memory | Tokens in `localStorage` |
-| Cold start | Documented and handled in the UI | — | Pretending it will not happen |
+| API client | `openapi-fetch`, typed by the generated file | — | axios; a hand-written `fetch` wrapper per endpoint |
+| Server state | TanStack Query v5 | — | SWR; `useEffect` + `fetch` to load a page's data |
+| Client state | None — React state and URL search params | Zustand, for state shared across distant client components | Redux, Redux Toolkit |
+| Frontend → backend wiring | Same origin by construction: one process serves both | — | A separate frontend host; a proxy in front of the backend; CORS in any deployed environment; backend URLs in source |
+| Accounts | As §5.4 Track B: users table, server-side sessions, HTTP-only cookie | — | Tokens in `localStorage`; bearer tokens handed to the browser; JWT browser sessions |
+| Deploy artifact | One container image: a Node stage builds the export, a Python stage serves it | — | Two images; Docker required for local development or tests |
+| Tests | Backend as §5.4 Track B; frontend as §5.5, with Playwright against the backend serving the export | — | jsdom, happy-dom |
 
-**How the two deployments connect.** They do not talk to each other. The frontend is
-static files on a CDN; the JavaScript runs in the user's browser and calls the backend
-over HTTP. Only two settings join them: the backend's URL, injected into the frontend at
-build time as an environment variable, and the frontend's origin, listed in the backend's
-CORS allowlist. A mismatch between those two is the most common failure in this archetype.
+**Why one container.** Two hosts need a proxy to stay same-origin, and Cloudflare's
+`_redirects` cannot proxy to an external domain, so that proxy becomes Worker code. Two
+hosts also mean two deploy pipelines and a frontend that can run against an API version it
+was not built with. Served by the backend, the export is same-origin by construction: no
+CORS, no proxy, one image, one tag, one version. The cost is that the pages sleep with the
+backend, so the first visit after idle waits about a minute, as in `web-python` and
+`web-ts`.
 
-**Prefer a same-origin proxy.** Configure the frontend host to forward `/api/*` to the
-backend instead of having the browser call the backend's domain directly. Then every
-request is same-origin from the browser's point of view: no CORS configuration, and
-cookie-based sessions work without `SameSite=None` gymnastics. A project MAY instead call
-the backend cross-origin, but then the CORS allowlist MUST be environment-driven and the
-cookie policy MUST be documented.
+**What a static export gives up.** Dynamic route segments without `generateStaticParams()`,
+rewrites, redirects, `headers()`, cookies, server actions, and route handlers that read the
+request. Record IDs travel in query parameters (`/items?id=3`), not in path segments.
+Redirects and response headers are set by the backend.
 
-**Cold start is not solved by either approach.** A free-tier backend that sleeps after
-idle takes tens of seconds to wake. The first request MUST surface that state in the UI
-rather than appearing broken. If always-on response time is a requirement, move the
-backend to an always-free VM instead of a sleeping free tier.
+**Why TanStack Query is the default here and not in `web-ts`.** In `web-ts` a page reads
+its data on the server. Here every read happens in the browser, against an API that may be
+waking up, so loading, error, retry and cache invalidation are needed on every page. That
+is the library's whole job.
+
+**Cold start.** `README.md` says the first visit after idle is slow. If always-on response
+time is a requirement, move to an always-free VM rather than keeping the service awake.
 
 ### 5.7 Mobile
 
@@ -545,7 +555,7 @@ All selections below are free tiers that permit commercial use, except where not
 | `web-static` | Cloudflare Workers, static assets only (no Worker script) | Netlify Free; GitHub Pages — public repository, non-commercial sites only | Workers Free: static asset requests free and unlimited; 20,000 files per deployment, 25 MiB per file. Netlify Free: 300 credits/month shared by deploys, bandwidth and requests; every site pauses until the next cycle when they run out. GitHub Pages: terms exclude online businesses, e-commerce and commercial SaaS |
 | `web-python` | Render (free web service) + Neon Free Postgres when the app keeps durable data | Oracle Cloud Always Free; **Streamlit Community Cloud — Track A, personal non-commercial practice only** | Render free: 512 MB RAM, sleeps after 15 min idle, about 1 min to wake. Neon Free: 1 GB per project, sleeps after 5 min idle and wakes on the next query |
 | `web-ts` | Render (free web service) + Neon Free Postgres when the app keeps durable data | Oracle Cloud Always Free; **Vercel Hobby — personal non-commercial projects only** | Same limits as `web-python`. Cloudflare Workers Free is not listed: see §5.5 |
-| `web-api` | Cloudflare Pages (frontend) + Render (backend) + Neon Free Postgres when the backend keeps durable data | Oracle Cloud Always Free (both) | The only archetype spanning two platforms on free tiers |
+| `web-api` | Render (free web service — one container serving the frontend and the API) + Neon Free Postgres when the app keeps durable data | Oracle Cloud Always Free | Same limits as `web-python`. One service: one cold start, one draw on the workspace's 750 free instance hours a month |
 | Desktop | GitHub Releases | — | — |
 | Mobile | EAS Build → internal link → Google Play | — | — |
 | `agent-plugin` | GitHub repository as the marketplace source; npm or PyPI for an executable; the official MCP registry for a server | — | No hosting service and no account cost. Publishing to npm, PyPI, and the MCP registry is free |
@@ -553,8 +563,7 @@ All selections below are free tiers that permit commercial use, except where not
 **Cloudflare Workers, not Pages.** Cloudflare directs new projects to Workers static
 assets and adds new features only there; Pages keeps working but is no longer the target.
 An assets-only Worker has no script, so it serves files the way Pages does, with
-`_headers` and `_redirects` supported. The `web-api` row still names Pages for the
-frontend; it is revisited when that archetype's rule is written.
+`_headers` and `_redirects` supported.
 
 **Vercel.** Its free Hobby plan is restricted to non-commercial use. Any project that
 might be monetized MUST NOT depend on it. Cloudflare carries no such restriction, which is
@@ -749,14 +758,9 @@ and should move to `web-ts` or `web-api`.
 
 ### 9.7 Web — Split
 
-Everything in §9.5 (Track B backend) plus the Node.js, pnpm and test rows of §9.6.
-Additionally:
-
-| Requirement | Scope | Note |
-|---|---|---|
-| Render account | Account | Backend |
-| Cloudflare account | Account | Frontend and `/api/*` proxy |
-| Docker or Podman | System — optional | Backend parity |
+Everything in §9.5 except the Track A, Tailwind standalone CLI and htmx rows, plus the
+pnpm, Node.js and Chromium rows of §9.6. One Render account hosts the whole app; no other
+host account is needed.
 
 ### 9.8 Mobile
 
