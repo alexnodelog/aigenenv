@@ -527,6 +527,8 @@ Partial success followed by a blind retry is how one charge becomes three.
 - `main` is always in a working state. Force-pushing to `main` is PROHIBITED.
 - `--no-verify` is PROHIBITED. If a hook is wrong, fix the hook.
 - Release versions follow Semantic Versioning, tagged in Git.
+- Pushing a tag that makes CI deploy or publish a release is deploying (§4): an agent
+  pushes it only after the human has approved that release.
 - For anything distributed to someone other than its author: release artifacts are produced
   by CI, never from a developer's machine. Before release, CI MUST run every check the
   project configures — at minimum the full test suite and a clean-checkout build — and MUST
