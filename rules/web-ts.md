@@ -292,12 +292,11 @@ It uses a fresh database and test placeholders for every secret. Timeouts: healt
 
 - `version` in `package.json` is the single source; `/api/health`, the image tag and the
   Git tag read it. CI fails a tag that does not match.
-- Pushing a version tag deploys, so it is a Blocking action (`GLOBAL_RULES.md` §4): an
-  agent pushes one only after the human has approved that release.
 - Auto-deploy on push is off. CI triggers the host's deploy for the tagged commit after
   every check passes — except when anything under `drizzle/` differs from the previous
   tag. CI then stops before deploying, and the human deploys after the backup in §4.3.
-- Rollback is a redeploy of the previous tag.
+- Rollback redeploys the previous tag, and only when nothing under `drizzle/` changed since
+  it; otherwise the human decides first (`GLOBAL_RULES.md` §12).
 - `README.md` tells users the first visit after idle may take about a minute.
 
 ### 5.5 CI
