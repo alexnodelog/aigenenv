@@ -6,7 +6,8 @@ description: Set up the build toolchain, build the image, run the smoke test, co
 # python-web-release (draft)
 
 Raw procedures moved out of `rules/web-python.md`. The rules they serve stay in that file
-(§2, §4.3, §5). To be completed and verified in step 7.
+(§2, §4.3, §5). This draft leaves `_drafts/` only when the Unverified list at the end is
+empty.
 
 ## 1. Toolchain setup (rule §2)
 
@@ -51,18 +52,55 @@ addopts = "-m 'not integration'"
 ## 6. CI (rule §5.5)
 
 - Push / PR job, in order: `uv sync --locked` → Ruff → mypy → pytest → `alembic check` →
+  fail if a file under `migrations/versions/` that exists on `main` was modified or deleted →
   PostgreSQL service container: adapter tests + `alembic upgrade head` → Track B:
   regenerate stylesheet, `git diff --exit-code` → build image, smoke test.
 - Tag job: all of the above → check tag equals `pyproject.toml` version → if an Alembic
-  revision was added since the previous tag, stop → trigger the host's deploy hook → poll
+  anything under `migrations/versions/` differs from the previous tag, stop → trigger the host's deploy hook → poll
   `/healthz` for the version, allowing two minutes for a cold start → `GET /`.
 
 ## 7. Deploy carrying a migration (rule §4.3, §5.4)
 
-1. `pg_dump` the production database.
-2. Restore the dump into an empty database; confirm it opens and has the expected tables.
+PostgreSQL only. On SQLite, `adapters/migrate.py` backs the file up itself at start.
+
+1. Record the row counts of the main tables, then
+   `pg_dump --format=custom --no-owner "$DIRECT_URL" > backup-<tag>.dump`. On Neon use the
+   **direct** (not pooled) URL, held on the human's machine only.
+2. Restore into an empty database (a Neon branch or local PostgreSQL):
+   `pg_restore --no-owner --exit-on-error -d "$EMPTY_URL" backup-<tag>.dump`; the restored
+   row counts match the recorded ones. If they differ, users wrote during the dump: suspend
+   the service on the host, and repeat from step 1.
 3. Deploy the tag.
 4. Confirm the version and `/`.
+5. The dump holds personal data and any password hashes. Keep it encrypted, or delete it
+   once the release is confirmed.
+
+## 8. Scheduled backup (rule §4.3)
+
+Only for an app holding data its users cannot recreate.
+
+- PostgreSQL: GitHub Actions workflow on a schedule. Install the PostgreSQL client at or
+  above the server's major; `pg_dump` with the direct URL from the secret
+  `BACKUP_DATABASE_URL`, set on the backup job's environment only, never on the app or
+  another job.
+- SQLite: the database lives on the host's disk, which CI cannot reach. The method is an
+  ADR.
+- Either way: encrypt the dump with the public key named in the ADR (the private key is
+  never in CI or in the store), upload it to the chosen off-host store, fail the job on any
+  non-zero exit. Confirm once that a failed run notifies the human, and restore an
+  encrypted dump once end to end. Store, retention and key location are an ADR.
+
+## 9. Rollback (rule §5.4)
+
+1. Check first whether `migrations/versions/` changed between the previous tag and the
+   deployed one.
+2. No change: redeploy the previous tag through the host.
+3. Changed: do not redeploy yet — the old code may not run on the new schema. Decide with
+   the human: fix forward with a new revision, or restore the pre-deploy dump and then
+   redeploy the previous tag. Restoring discards every write made since the dump. Before
+   choosing it, dump the current database, state what the restore would lose, and get the
+   human's explicit approval of that loss.
+4. After rollback, repeat the post-deploy checks of §7.
 
 ## Unverified — check before finalizing
 
@@ -70,4 +108,6 @@ addopts = "-m 'not integration'"
 - Exact `streamlit run` flags for address and port in the current version.
 - Render deploy hook mechanics, and how to turn off auto-deploy.
 - `pg_dump` / `pg_restore` flags for Neon.
+- GitHub's failure notification for scheduled workflows: who receives it.
+- How a SQLite app on a host's disk is backed up off the host.
 - Dockerfile pattern for copying a pinned uv binary.
