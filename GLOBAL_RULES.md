@@ -501,12 +501,16 @@ Partial success followed by a blind retry is how one charge becomes three.
 - **Deployment secrets** — the ones the project itself needs to run: API keys, database
   URLs, signing keys. They come from the environment, and `.env.example` documents every
   one.
-- **End-user credentials** — the ones a person types into the application: their account
-  password, their own API token. They never come from the environment and never appear in
-  `.env.example`. They go to the OS credential store the archetype rule names, and the
-  application reads them back from there. An application that cannot reach that store
-  disables the features needing the credential; it MUST NOT fall back to a file, the
-  database, or an environment variable.
+- **End-user credentials** — the ones a person gives the application so it can act for
+  them elsewhere: their password or API token for another service. They never come from
+  the environment and never appear in `.env.example`. They go to the OS credential store
+  the archetype rule names, and the application reads them back from there. An application
+  that cannot reach that store disables the features needing the credential; it MUST NOT
+  fall back to a file, the database, or an environment variable. A server archetype has no
+  OS credential store; its rule says where these go, or forbids storing them.
+- **Sign-in passwords** — the ones a person uses to sign in to the application itself. The
+  application stores only a slow hash of each, never the password, as the archetype rule
+  names.
 - `.env` MUST be in `.gitignore` before the first commit.
 - All external input — user input, API responses, file contents, environment variables —
   MUST be validated at the boundary before reaching business logic.
