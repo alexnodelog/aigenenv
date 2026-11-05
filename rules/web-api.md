@@ -148,11 +148,11 @@ designed UI (`web-python`), or if one person uses it on one machine with local d
 
 ### 4.1 Request and rendering model
 
-Backend — one request, one thread from Uvicorn's pool.
+Backend — FastAPI runs each plain `def` handler on a worker thread.
 
-- Route handlers are plain `def` using the sync `Session`; FastAPI runs them in a
-  threadpool. An `async def` handler MUST NOT call anything that blocks — a sync DB call, a
-  sync HTTP client, file I/O — because it stalls every other request.
+- Route handlers are plain `def` using the sync `Session`. An `async def` handler runs on
+  the event loop shared by every request, so it MUST NOT call anything that blocks — a sync
+  DB call, a sync HTTP client, file I/O.
 - One request is one transaction. The request-scoped session dependency commits after a
   successful handler and rolls back on any exception. Services and adapters MUST NOT call
   `commit()`.
@@ -161,10 +161,11 @@ Backend — one request, one thread from Uvicorn's pool.
   what that user may do. Hiding a page or a button is not authorization.
 - `GET` and `HEAD` never change state.
 - Every string and list field in an API schema has a maximum length, and every list
-  endpoint a maximum page size. A request body over 1 MB is refused with 413 unless an ADR
-  raises the limit for one endpoint. Bytes are counted as they arrive, also when the
-  request has no `Content-Length`, and the request is refused at the limit without the
-  body being read whole.
+  endpoint a maximum page size. A request body of up to 1 MiB (1,048,576 bytes) is
+  accepted; one byte more is refused with 413, unless an ADR raises the limit for one
+  endpoint. Bytes are counted as they arrive, also when the request has no
+  `Content-Length`, and the request is refused as soon as the count passes the limit,
+  without the body being read whole.
 - Cross-site request forgery: every state-changing request MUST carry the custom header
   the API client in `src/api/client.ts` sets on every request, and is refused with 403
   without it, or when its `Origin` header is present and is not the app's own origin from
@@ -191,7 +192,8 @@ paint happens in the browser.
 - A component that calls `useSearchParams()` sits inside a `<Suspense>` boundary, or the
   export fails to build.
 - Data reaches the DOM through JSX. `dangerouslySetInnerHTML` with any value that is not a
-  compile-time constant is PROHIBITED.
+  compile-time constant is PROHIBITED. A URL from data goes into `href` or `src` only after
+  its scheme is checked to be `http:` or `https:`.
 
 ### 4.2 Paths
 
@@ -247,15 +249,18 @@ paint happens in the browser.
 - PostgreSQL: the app cannot dump its own database. Before a deploy that carries a
   migration, the human suspends the service on the host, takes a `pg_dump`, confirms it
   restores into an empty database, and deploys; the service serves again only on the new
-  version. No write lands after the dump, and no old instance runs during the migration.
+  version. The web service is the only writer to the database; anything else that writes
+  is stopped too. No write lands after the dump, and no old instance runs during the
+  migration.
   §5.4 stops CI for this. Neon's point-in-time restore is not the backup.
 - An app holding data its users cannot recreate MUST take a backup on a schedule and keep
   it off the database host. A restore from that backup into an empty database MUST have
   succeeded once before the app holds real data. Backups are encrypted before they leave
   the CI job, with a key kept apart from the store that holds them. A failed backup run
   MUST fail a scheduled CI job whose failure notification reaches the human. Each run
-  restores its own dump into an empty database and checks its Alembic revision and that
-  every table the models define exists, before keeping it; a failed check fails the run.
+  restores its own dump into an empty database and checks, as a minimum proof that the
+  dump restores, its Alembic revision and that every table the models define exists,
+  before keeping it; a failed check fails the run.
   The data loss users can accept, the schedule that follows from it, retention, store and
   key location are recorded in `DECISIONS.md`.
 - Shipped revisions are append-only: a file under `migrations/versions/`, once on `main`,
@@ -280,14 +285,18 @@ paint happens in the browser.
 - Sessions: a random session ID in a cookie with `HttpOnly`, `Secure` and `SameSite=Lax`,
   the row server-side, rotated on login, deleted on logout, expiring after an idle
   time of 24 hours and an absolute time of 30 days, unless an ADR names other values.
-- Failed logins are counted in the database, so the limit survives a restart. Unless an
-  ADR names other values: after 5 consecutive failures for one account from one client
-  address, that pair is refused for 15 minutes; a client address with 20 failures in any
-  15-minute window is refused for 15 minutes. A pair's count resets on success and when
-  its refusal expires. The limit is keyed by account and address together so that an
-  attacker elsewhere cannot lock the owner out. Each refusal is logged as a warning. The response is the same whether or
-  not the account exists, and a sign-in for an unknown account still runs one Argon2
-  verification, so both paths cost the same.
+- Failed logins are counted in the database, so the limits survive a restart. Two
+  separate counters, unless an ADR names other values:
+  - Account and client address together: after 5 consecutive failures the pair is refused
+    for 15 minutes. Its count resets on success and when the refusal expires. Keying by the
+    pair means an attacker elsewhere cannot lock the owner out.
+  - Client address alone: failures in the last 15 minutes, rolling, never reset. While
+    there are 20 or more, the address may make one sign-in attempt per minute; it is
+    slowed, not blocked, so users sharing the address can still sign in.
+- The start of a refusal or a slowdown is logged once as a warning; the attempts it
+  refuses are not logged one by one.
+- A sign-in response is the same whether or not the account exists, and a sign-in for an
+  unknown account still runs one Argon2 verification, so both paths cost the same.
 - Behind the host's TLS proxy, Uvicorn MUST trust that proxy's forwarded headers
   (`--forwarded-allow-ips`, set per host), or `Secure` cookies break and the rate limit
   sees one client address. The walking skeleton (§5.2) confirms two clients are counted
@@ -300,8 +309,11 @@ paint happens in the browser.
   base-uri 'self'; form-action 'self'; frame-ancestors 'none'`. The export cannot set
   headers. Exported pages carry inline scripts and no server issues a nonce, so
   `script-src` needs `'unsafe-inline'`, and this policy does not stop an injected inline
-  script from running. The defence against injection is §4.1: data reaches the DOM only
-  through JSX. The policy limits what such a script can load or send. Changing a directive
+  script from running. Such a script can call the API as the signed-in user; the policy
+  only limits what it can load from or send to other origins. The defence against
+  injection is §4.1's rules on how data reaches the DOM. A hash-based policy needs every
+  exported page's inline scripts hashed after each build and served as per-page headers;
+  it needs an ADR. Changing a directive
   needs an ADR.
 - Logs go to stdout, one line per event, with a request ID. The app writes no log files.
 - An error response carries the request ID and a message for the user, never SQL, a
@@ -435,8 +447,8 @@ the right endpoint and the result is shown — not the rule itself.
   user sees: text, `disabled`, `aria-invalid`, the URL after navigation.
 - One test submits input containing markup and asserts it comes back as text.
 - A Content-Security-Policy violation reported in the browser fails the Playwright run.
-- A request body just over 1 MB is refused with 413, with and without `Content-Length`;
-  one just under is accepted.
+- A request body of exactly 1 MiB is accepted and one of 1 MiB + 1 byte is refused with
+  413, each with and without `Content-Length`.
 - Waiting real time — `time.sleep()`, `setTimeout`, `page.waitForTimeout` — is PROHIBITED;
   wait for an element, a URL, or a response.
 

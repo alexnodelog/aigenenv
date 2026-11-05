@@ -110,15 +110,17 @@ PostgreSQL only. On SQLite, `adapters/migrate.py` backs the file up itself at st
 
 1. Suspend the service on the host. From here until step 4, nothing writes to the
    database and no old instance is running.
-2. `pg_dump --format=custom --no-owner "$DIRECT_URL" > backup-<tag>.dump`. On Neon use the
-   **direct** (not pooled) URL, held on the human's machine only.
-3. Restore into an empty database (a Neon branch or local PostgreSQL):
-   `pg_restore --no-owner --exit-on-error -d "$EMPTY_URL" backup-<tag>.dump`. A failure
-   stops the release; resume the service on the old version.
+2. Dump straight into encryption, so no plaintext file is written:
+   `pg_dump --format=custom --no-owner "$DIRECT_URL" | <encrypt to the backup public key>
+   > backup-<tag>.dump.enc`. On Neon use the **direct** (not pooled) URL, held on the
+   human's machine only.
+3. Restore into an empty database (a Neon branch or local PostgreSQL), decrypting into the
+   pipe: `<decrypt> backup-<tag>.dump.enc | pg_restore --no-owner --exit-on-error -d
+   "$EMPTY_URL"`. A failure stops the release; resume the service on the old version.
 4. Deploy the tag so that the service comes back on the new version only.
 5. Run the post-deploy checks (§12).
-6. The dump holds personal data and password hashes. Keep it encrypted, or delete it once
-   the release is confirmed.
+6. The dump holds personal data and password hashes. Keep only the encrypted file, under
+   the backup retention in `DECISIONS.md`; delete the restore-test database.
 
 ## 10. Scheduled backup (rule §4.3)
 
@@ -132,8 +134,9 @@ Only for an app holding data its users cannot recreate.
   never in CI or in the store), upload it to the chosen off-host store, fail the job on any
   non-zero exit.
 - Before encrypting, restore the dump into a PostgreSQL service container in the same job
-  with `pg_restore --exit-on-error`, and check its `alembic_version` matches the
-  production revision; a mismatch fails the job.
+  with `pg_restore --exit-on-error`, and check that its `alembic_version` matches the
+  production revision and that every table the models define exists; either failing fails
+  the job.
 - Once, before the app holds real data: confirm that a failed run notifies the human, and
   restore an encrypted dump end to end, decrypting with the private key.
 
@@ -168,6 +171,7 @@ Allow two minutes for a cold start, then:
 - Render: which forwarded header carries the client address, and the value for
   `--forwarded-allow-ips`.
 - Render deploy hook mechanics, and how to turn off auto-deploy.
+- `pg_restore` reading a custom-format dump from a pipe (no seekable file).
 - Render: how to deploy a tag to a suspended service so that it resumes on the new version
   without the old one serving first. Render feedback reports that resuming triggers a new
   build; which commit it builds is unknown. Until verified, no migration deploy is done
