@@ -243,7 +243,8 @@ and exits 0 — or non-zero naming each failure. It checks that:
 
 ### 5.5 CI
 
-- Push / PR: `pnpm install --frozen-lockfile`, Biome, the type checks and build of §5.2,
+- Push / PR: `pnpm install --frozen-lockfile`, install Chromium on the runner, Biome, the
+  type checks and build of §5.2,
   Vitest including the boundary check, the smoke test.
 - Version tag: all of the above → deploy → confirm that `/version.txt` matches the tag, `/`
   answers 200, a random path answers 404 with an HTML body, and the CSP header on `/` equals
