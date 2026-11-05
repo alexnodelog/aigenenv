@@ -175,11 +175,11 @@ Procedure: skill `pyside-release`.
 - PySide6 is imported by submodule (`from PySide6.QtWidgets import ...`). A bare
   `import PySide6` is PROHIBITED: the build ships the wrong Qt libraries.
 - **Declared target OSes** are the ones `README.md` lists under its install section. That
-  list is the single source for `required-environments`, the first-week builds, and the CI
+  list is the single source for `required-environments`, the walking-skeleton builds, and the CI
   matrix; adding or dropping an OS means editing it there first.
-- Build once on every declared target OS in the first week, as a walking skeleton — on CI
-  where the developer has no such machine. Leaving the first cross-platform build until
-  release is PROHIBITED.
+- Before any feature beyond it is built, a walking skeleton — one window, the database
+  with its first migration — is built, packaged and passes `--self-check` on every
+  declared target OS, on CI where the developer has no such machine.
 
 ### 5.3 Self-check
 
