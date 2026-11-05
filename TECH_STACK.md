@@ -459,28 +459,53 @@ time is a requirement, move to an always-free VM rather than keeping the service
 
 | Category | Default | Alternative | Prohibited |
 |---|---|---|---|
-| Framework | React Native via **Expo** (managed) | — | Bare React Native without a stated reason |
+| Framework | React Native via **Expo**, Continuous Native Generation: `android/` and `ios/` are generated, not committed | — | Bare React Native without a stated reason; committed, hand-edited native directories |
 | Navigation | Expo Router | React Navigation | — |
-| State | Zustand | — | — |
+| State | None — `useState`, `useReducer` | Zustand, for state shared by distant screens | Redux, Redux Toolkit |
 | Local storage | expo-sqlite | AsyncStorage for key-value only | — |
 | Secure storage | expo-secure-store | — | Tokens in AsyncStorage |
 | Unit tests | Jest (`jest-expo`) | — | — |
 | E2E | Maestro | — | — |
-| Android build | **Local** — `npx expo run:android`, or `eas build --local` | EAS cloud build | A pipeline that only works through the cloud |
-| iOS build | EAS cloud build | Local on macOS + Xcode | — |
-| Device testing | Android emulator | Physical device over USB; Expo Go on the same LAN | Depending on Expo Go as the only test path |
-| OTA updates | EAS Update | — | Shipping native changes as OTA |
+| pnpm linker | `isolated` (pnpm's default) | `hoisted`, when a named library fails under `isolated` | `enableGlobalVirtualStore`: Metro cannot resolve packages stored outside the project |
+| CLI | Expo CLI from the `expo` package, run as `pnpm expo` | EAS CLI, only with an EAS alternative below: `pnpm dlx eas-cli@<exact version>` | `npx`; `eas-cli` as a project dependency (Expo advises against it); a global install |
+| Development build | Local — `pnpm expo run:android`, with `expo-dev-client` | EAS cloud build | Expo Go as the only test path |
+| Android release build | CI — GitHub Actions runs `expo prebuild` and Gradle, signed with the upload key held in CI secrets | EAS cloud build — personal non-commercial projects only | A release built on a developer machine; `eas build --local` on Windows |
+| iOS build | Deferred | EAS cloud build; local on macOS + Xcode | — |
+| Device testing | Android emulator | Physical device over USB; Expo Go on the same LAN | — |
+| OTA updates | None | EAS Update — personal non-commercial projects only | Shipping native changes as OTA |
+
+**Why EAS is not the default.** EAS is Expo's hosted build, update and submit service.
+Its free plan is limited to pre-revenue startups, proofs of concept, and hobby and student
+projects, and a commercial project earning more than US$1,500 a month must move to a paid
+plan. Under §1 that counts as not free, the same as Vercel Hobby. The free plan also caps
+builds at 15 Android and 15 iOS a month and updates at 1,000 monthly active users. The Expo
+SDK itself is MIT-licensed and needs no account; only EAS does. GitHub Actions produces the
+same Android artifact with no account beyond GitHub.
+
+**Why not `eas build --local`.** It still requires an Expo login, and Expo supports it only
+on macOS and Linux. On Windows, `pnpm expo run:android` is the local build.
 
 **Distribution path**, in order:
 
-1. **Internal** — EAS `preview` profile, `distribution: internal`, Android APK by link. No
-   store account. The free EAS plan covers roughly 30 builds a month.
-2. **Google Play** — one-time developer registration fee, AAB from the `production` profile.
-3. **iOS** — deferred. Requires a yearly Apple Developer membership. No stack change is
-   needed when that day comes: EAS Build compiles iOS in the cloud, so a Mac is not
-   required.
+1. **Internal** — the signed release APK that CI attaches to a GitHub Release. No store
+   account.
+2. **Google Play** — one-time developer registration fee, AAB built by CI. A personal
+   account created after 13 November 2023 must run a closed test with at least 12 testers
+   opted in for 14 continuous days before it can apply for production access. An
+   organization account is exempt but needs a D-U-N-S number.
+3. **iOS** — deferred. Requires a yearly Apple Developer membership and either a Mac or EAS
+   cloud build, so choosing it reopens the EAS question above.
 
-Target floor: Android 7+, iOS 16.4+.
+**Android developer verification.** Google is extending to every country in 2027 a
+requirement that apps installed on certified Android devices, sideloaded APKs included,
+come from a verified developer who has registered the app's package name and signing key.
+A free limited-distribution account covers up to 20 devices without government ID.
+Installing over ADB during development is not affected. The package name and the signing
+key are therefore permanent: an app distributed outside Play cannot ship an update once
+its key is lost.
+
+Target floor: set by the Expo SDK (Android 7+, iOS 16.4+ when this was written). A project
+never lowers it.
 
 ### 5.8 Agent Plugin
 
@@ -578,7 +603,7 @@ All selections below are free tiers that permit commercial use, except where not
 | `web-ts` | Render (free web service) + Neon Free Postgres when the app keeps durable data | Oracle Cloud Always Free; **Vercel Hobby — personal non-commercial projects only** | Same limits as `web-python`. Cloudflare Workers Free is not listed: see §5.5 |
 | `web-api` | Render (free web service — one container serving the frontend and the API) + Neon Free Postgres when the app keeps durable data | Oracle Cloud Always Free | Same limits as `web-python`. One service: one cold start, one draw on the workspace's 750 free instance hours a month |
 | Desktop | GitHub Releases | — | — |
-| Mobile | EAS Build → internal link → Google Play | — | — |
+| Mobile | GitHub Actions build → GitHub Releases (internal) → Google Play | EAS Build, EAS Update — personal non-commercial projects only | EAS Free: 15 Android builds a month, updates to 1,000 monthly active users; commercial projects excluded (§5.7) |
 | `agent-plugin` | GitHub repository as the marketplace source; npm or PyPI for an executable; the official MCP registry for a server | — | No hosting service and no account cost. Publishing to npm, PyPI, and the MCP registry is free |
 
 **Cloudflare Workers, not Pages.** Cloudflare directs new projects to Workers static
@@ -660,7 +685,7 @@ retrieval pipeline is usually under 200 lines of owned, readable code. Start wit
 |---|---|
 | Web | GitHub Actions → platform deploy hook or container image |
 | Desktop | GitHub Actions matrix build → GitHub Releases |
-| Mobile | EAS Build → internal link, then store submission |
+| Mobile | GitHub Actions build → GitHub Releases, then Google Play |
 | Versioning | Semantic Versioning, Git tags, generated from Conventional Commits |
 
 Release artifacts MUST be produced by CI, never from a developer's machine.
@@ -788,28 +813,28 @@ host account is needed.
 | Requirement | Scope | Note |
 |---|---|---|
 | pnpm | System — standalone | Installed first. Exact version in `packageManager` |
-| Node.js LTS | Installed by pnpm | Version in `devEngines.runtime`. No separate Node installer |
-| Expo CLI, EAS CLI | Run via `npx` | No global install |
-| Expo account | Account | Free, ~30 builds/month |
-| Android Studio + Android SDK + emulator image | **System — required** | Local builds and the emulator. The only build path that survives a restricted network |
+| Node.js LTS | Installed by pnpm | Version in `devEngines.runtime`, on a line the Expo SDK supports. No separate Node installer |
+| Expo CLI | Project dependency (`expo`) | Run as `pnpm expo`. No global install |
+| Android Studio + Android SDK + emulator image | **System — required** | Local builds and the emulator. SDK Platform 36 for current Expo SDKs. The only build path that survives a restricted network |
 | JDK 17 | **System — required** | Gradle. Android Studio bundles a JDK, but set `JAVA_HOME` explicitly rather than relying on it |
-| Expo Go app | Phone — optional | Fast iteration convenience. Requires the phone and the PC on the same reachable network |
-| Watchman | System — macOS only | — |
-| Maestro CLI | System | Requires Java |
-| Google Play developer account | Account — one-time fee | Only at store release |
-| macOS + Xcode + Apple Developer membership | System + Account — deferred | iOS only. EAS Build compiles iOS in the cloud, so no Mac is required for builds — but App Store submission requires the paid membership |
+| Maestro CLI | System | Requires Java 17+. Native Windows install supported |
+| Upload keystore | Project-owned file, outside the repository | Created once, backed up off the machine. CI receives it and its passwords as secrets |
+| Expo Go app | Phone — optional | Fast iteration convenience. Requires signing in to an Expo account, and the phone and the PC on the same reachable network |
+| Expo account, EAS CLI | Account — only with an EAS alternative (§5.7) | Free plan excludes commercial projects |
+| Google Play developer account | Account — one-time fee | Only at store release. New personal accounts face the 12-tester rule (§5.7) |
+| Android developer verification | Account — distributing outside Play, from 2027 | Free limited-distribution account up to 20 devices |
+| macOS + Xcode + Apple Developer membership | System + Account — deferred | iOS only. App Store submission requires the paid membership |
 
-**Why the local toolchain is required rather than optional.** Expo is often described as
-cloud-first, but `npx expo run:android` and `eas build --local` run the entire Android
-build on the developer's machine. That path is the default here because it is the only one
-that works when outbound access to a build service is blocked, when a personal phone may
-not join the network, or when client isolation prevents a phone from reaching the PC's
-bundler. Gradle still fetches dependencies from Maven on a first build, but once the cache
-is warm the loop is local. EAS cloud build remains available and is the right choice when
-the network allows it — it just cannot be the foundation.
+**Why the local toolchain is required rather than optional.** `pnpm expo run:android` runs
+the whole Android build on the developer's machine, with no Expo account. It is the only
+development path that works when outbound access to a build service is blocked, when a
+personal phone may not join the network, or when client isolation prevents a phone from
+reaching the PC's bundler. Gradle still fetches dependencies from Maven on a first build,
+but once the cache is warm the loop is local. Releases are built by CI
+(`GLOBAL_RULES.md` §12), never on this machine.
 
-iOS is the exception and stays deferred: a local iOS build requires macOS and Xcode, so
-for iOS the cloud build is the only option short of buying a Mac.
+iOS is the exception and stays deferred: a local iOS build requires macOS and Xcode, and
+the cloud route is EAS (§5.7).
 
 ### 9.9 Agent Plugin
 
@@ -847,7 +872,6 @@ you. Everything else in this document installs through uv, pnpm, or a project de
 | Windows | Visual Studio Build Tools (C++ workload) | `pc-app-python` (Nuitka); `pc-app-electron` only without a prebuilt native binary |
 | Windows | Inno Setup | `pc-app-python` installers |
 | macOS | Xcode Command Line Tools | `pc-app-python`; `pc-app-electron` only without a prebuilt native binary |
-| macOS | Watchman | `mobile` |
 | Linux | build-essential (gcc), ccache | `pc-app-python`; `pc-app-electron` only without a prebuilt native binary |
 | Linux | Qt runtime libraries | `pc-app-python` |
 | Any | JDK 17 | `mobile` — Gradle builds and Maestro |
@@ -881,7 +905,7 @@ that. On a restricted or filtered network, the column that matters is the middle
 | `web-python` | Network | **Fully offline** | Network |
 | `web-ts` | Network | **Fully offline** | Network |
 | `web-api` | Network | **Fully offline** | Network |
-| `mobile` | Network, including Gradle's first dependency fetch | **Offline once the Gradle cache is warm** | Android: local. iOS: network |
+| `mobile` | Network, including Gradle's first dependency fetch | **Offline once the Gradle cache is warm** | Android: CI. iOS: network, deferred |
 | `agent-plugin` | Network | **Fully offline** for the executable's own tests and the Inspector; **network to test the bundle**, since the host's model is a cloud service | Network |
 | AI/RAG module | Network for model download | **Fully offline with Ollama** | — |
 
