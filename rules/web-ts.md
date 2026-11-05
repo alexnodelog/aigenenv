@@ -31,7 +31,7 @@ Python libraries (`web-api`), or if one person uses it on one machine with local
 | Migrations | `drizzle-kit generate`, SQL files in `drizzle/`, committed | — | `drizzle-kit push`; editing a shipped migration; hand-applied schema changes |
 | Accounts | Better Auth: email and password, database sessions, Drizzle adapter | — | A vendor's auth service (Clerk, Auth0, Supabase Auth, Firebase Auth); Auth.js / NextAuth; Better Auth `session.cookieCache`; JWT browser sessions; tokens in `localStorage` |
 | User file uploads | None | Storage chosen by ADR | The container's filesystem |
-| Background work | None — work finishes inside the request | `after()` for best-effort, non-durable follow-ups | A job-queue service; timers or loops started from a request |
+| Background work | None — work finishes inside the request | `after()` for best-effort, non-durable follow-ups; a durable job mechanism, chosen by ADR, for work whose loss is unacceptable | Timers or loops started from a request |
 | Lint / format | Biome | ESLint + Prettier | `next lint` (removed in Next.js 16) |
 | Type check | `tsc --noEmit` before `next build` | — | `typescript.ignoreBuildErrors` |
 | Tests | Vitest — `node` for logic, browser mode (`@vitest/browser-playwright`, `vitest-browser-react`) for client components; Playwright for pages | — | jsdom, happy-dom; Jest; Cypress |
@@ -82,6 +82,7 @@ Python libraries (`web-api`), or if one person uses it on one machine with local
 │   │                     api/auth/[...all]/route.ts, api/health/route.ts; globals.css
 │   ├── components/       app components; ui/ = shadcn/ui source
 │   ├── instrumentation.ts  register(): calls server.ts once at server start
+│   ├── proxy.ts          sets the per-request CSP nonce (§4.4); nothing else
 │   ├── config.ts         the only reader of process.env
 │   ├── server.ts         composition root: builds the pool, adapters, services
 │   ├── domain/           pure TypeScript
@@ -141,6 +142,12 @@ Python libraries (`web-api`), or if one person uses it on one machine with local
   route handler MUST NOT change state for a cookie-authenticated browser request. Route
   handlers serve that mount, the health check, and callers that are not browsers.
 - `GET` never changes state.
+- Every string and array field in a Zod input schema has a maximum length, and every list
+  a maximum page size. A request body of up to 1 MiB (1,048,576 bytes) is accepted; one
+  byte more is refused, unless an ADR raises the limit for one action or route. Server
+  actions keep Next.js's `bodySizeLimit` at that value; a route handler that reads a body
+  counts bytes as they arrive, also without `Content-Length`, and refuses as soon as the
+  count passes the limit, without reading the body whole.
 - An expected failure — invalid input, a rule the use case refused — is returned from the
   action as a value and shown next to the field. Only unexpected errors are thrown.
 - Data reaches the DOM through JSX. `dangerouslySetInnerHTML` with any value that is not
@@ -189,14 +196,21 @@ Python libraries (`web-api`), or if one person uses it on one machine with local
   non-zero, the server does not start, and the database is left at its previous migration.
   A database holding migrations the code does not know → refuse to start, log why.
 - The app cannot dump its own database. Before a deploy that carries a migration, the human
-  takes a `pg_dump` and confirms it restores into an empty database; §5.4 stops CI for
-  this. Neon's point-in-time restore is not the backup.
+  suspends the service on the host, takes a `pg_dump`, confirms it restores into an empty
+  database, and deploys; the service serves again only on the new version. The web
+  service is the only writer to the database; anything else that writes is stopped too.
+  No write lands after the dump, and no old instance runs during the migration. §5.4 stops
+  CI for this. Neon's point-in-time restore is not the backup.
 - An app holding data its users cannot recreate MUST take a backup on a schedule and keep
   it off Neon. A restore from that backup into an empty database MUST have succeeded once
   before the app holds real data. Backups are encrypted before they leave the
   CI job, with a key kept apart from the store that holds them. A failed backup run MUST
-  fail a scheduled CI job whose failure notification reaches the human. Schedule, store
-  and key location are recorded in `DECISIONS.md`.
+  fail a scheduled CI job whose failure notification reaches the human. Each run restores
+  its own dump into an empty database and checks, as a minimum proof that the dump
+  restores, its latest applied migration and that every table the schema defines exists,
+  before keeping it; a failed check fails the run. The data loss users can accept, the
+  schedule that follows from it, retention, store and key location are recorded in
+  `DECISIONS.md`.
 - Shipped migrations are append-only: a migration's SQL and snapshot, once on `main`,
   are never modified or deleted, and generated metadata such as `meta/_journal.json`
   only gains entries at its end. Fixes are new migrations.
@@ -211,12 +225,28 @@ Python libraries (`web-api`), or if one person uses it on one machine with local
 - `NEXT_PUBLIC_*` values are compiled into the browser bundle at build time and are never
   secret. Every other variable is read at runtime only.
 - Better Auth: `BETTER_AUTH_SECRET` (at least 32 characters) and `BETTER_AUTH_URL` come
-  from the environment; secure cookies in production; rate limiting on, stored in the
-  database (`rateLimit.storage = "database"`) so it survives a restart. Sessions expire
-  after a stated idle time and a stated absolute time.
+  from the environment; secure cookies in production; its built-in rate limiting on,
+  stored in the database (`rateLimit.storage = "database"`) so it survives a restart.
+- Sessions expire after an idle time of 24 hours and an absolute time of 30 days, unless
+  an ADR names other values. Better Auth's `expiresIn` sets the idle time; the app's own
+  session reader refuses and revokes a session older than the absolute time.
+- Failed sign-ins are counted in the database. Better Auth's built-in limiter counts every
+  request per address and path, so two separate counters are added through its hooks,
+  unless an ADR names other values:
+  - Account and client address together: after 5 consecutive failures the pair is refused
+    for 15 minutes. Its count resets on success and when the refusal expires. Keying by the
+    pair means an attacker elsewhere cannot lock the owner out.
+  - Client address alone: failures in the last 15 minutes, rolling, never reset. While
+    there are 20 or more, the address may make one sign-in attempt per minute; it is
+    slowed, not blocked, so users sharing the address can still sign in.
+- The start of a refusal or a slowdown is logged once as a warning; the attempts it
+  refuses are not logged one by one.
+- A sign-in response is the same whether or not the account exists, and a sign-in for an
+  unknown account costs the same password-hash work as one for a known account.
 - Rate limiting needs the real client address. The header the host uses for it is set in
   Better Auth's configuration and recorded in `DECISIONS.md`, and the walking skeleton
-  (§5.2) confirms two clients are counted separately.
+  (§5.2) confirms two clients are counted separately, and that an `X-Forwarded-For` header
+  the client sets itself does not change the address counted.
 - No mail provider is selected. A feature that sends mail — address verification,
   password reset, notifications — needs an ADR naming the provider and its free-tier terms
   before it is built. Until then, a password reset is done by an administrator.
@@ -226,10 +256,17 @@ Python libraries (`web-api`), or if one person uses it on one machine with local
 - Every route segment that renders data has an `error.tsx`, and the root has
   `global-error.tsx`. They show what failed and what to try, and the digest Next.js
   attaches, never the message of a server error.
-- `next.config.ts` `headers()` sets, for every path, `X-Content-Type-Options: nosniff`,
-  `Referrer-Policy: strict-origin-when-cross-origin`, and a Content-Security-Policy with at
-  least `frame-ancestors 'none'`, `base-uri 'self'`, `object-src 'none'` and
-  `form-action 'self'`.
+- `next.config.ts` `headers()` sets, for every path, `X-Content-Type-Options: nosniff` and
+  `Referrer-Policy: strict-origin-when-cross-origin`.
+- `proxy.ts` generates a fresh nonce per request and sets, on the request and on the
+  response, this Content-Security-Policy: `default-src 'self'; script-src 'self'
+  'nonce-<nonce>' 'strict-dynamic'; style-src 'self' 'unsafe-inline'; img-src 'self'
+  blob: data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self';
+  form-action 'self'; frame-ancestors 'none'`, adding `'unsafe-eval'` to `script-src` in
+  development only. Next.js applies the nonce to the scripts it renders. A nonce exists
+  only when a page renders per request, so the root layout reads it through `headers()`,
+  which makes every page render per request. `style-src` keeps `'unsafe-inline'` because
+  server-rendered `style` attributes take no nonce. Loosening a directive needs an ADR.
 - Logs go to stdout, one line per event. The app writes no log files.
 
 ---
@@ -276,6 +313,7 @@ The smoke test (`tests/smoke/`) starts the built image against an empty PostgreS
 database, waits for health, and exits 0 — or non-zero naming each failure. It checks that:
 
 - `/` answers 200, and an unknown path answers 404 with an HTML body;
+- two requests to `/` carry different CSP nonces;
 - every header §4.4 requires is present with its required value;
 - the image holds no `.env*` file, and the project's secret check passes over the image's
   filesystem as well as the tree;
@@ -301,7 +339,8 @@ It uses a fresh database and test placeholders for every secret. Timeouts: healt
 
 ### 5.5 CI
 
-- Push / PR: `pnpm install --frozen-lockfile`, Biome, both type checks, Vitest in Node and
+- Push / PR: `pnpm install --frozen-lockfile`, install Chromium on the runner, Biome, both
+  type checks, Vitest in Node and
   Chromium including the boundary check; a failure if the change breaks the append-only rule
   of §4.3 — new migration files and new journal entries pass; `drizzle-kit check` and a `drizzle-kit generate`
   that produces no new file, the adapter tests and migrations against a PostgreSQL service
@@ -341,6 +380,10 @@ right use case and the result is shown — not the rule itself.
 - Controls are found by role and label text, never by CSS selector or id.
 - Assert what the user sees: text, `disabled`, `aria-invalid`, the URL after a redirect.
 - One test submits input containing markup and asserts it comes back as text.
+- A Content-Security-Policy violation reported in the browser fails the Playwright run.
+- A request body of exactly 1 MiB is accepted and one of 1 MiB + 1 byte is refused, each
+  with and without `Content-Length`, for server actions and for each route handler that
+  reads a body.
 - Waiting real time — `setTimeout`, `page.waitForTimeout` — is PROHIBITED; wait for an
   element, a URL, or a response.
 

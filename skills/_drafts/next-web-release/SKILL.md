@@ -30,25 +30,44 @@ Items marked **[verify]** were not confirmed against the installed CLI. This dra
    prohibits.
 2. Add `packageManager`, `devEngines.runtime` (`onFail: "download"`), `pnpm-workspace.yaml`
    with `allowBuilds`.
-3. `next.config.ts`: `output: "standalone"`, `headers()` with the §4.4 set, `redirects()`.
-4. Biome: `pnpm add -D -E @biomejs/biome`, `pnpm exec biome init`.
-5. shadcn/ui: `pnpm add -D -E shadcn`, `pnpm exec shadcn init --base radix` **[verify CLI v4
+3. `next.config.ts`: `output: "standalone"`, `headers()` with `X-Content-Type-Options` and
+   `Referrer-Policy`, `redirects()`, and `serverActions.bodySizeLimit` at 1 MiB **[verify
+   the option path on Next.js 16, and that it counts bytes when `Content-Length` is
+   absent]**.
+4. `src/proxy.ts`: the nonce CSP of rule §4.4, following the Next.js CSP guide — set the
+   policy on the request headers and the response; matcher excludes `api`,
+   `_next/static`, `_next/image`, `favicon.ico` and prefetch requests. The root layout
+   reads the nonce with `headers()` **[verify that this alone makes every page render per
+   request]**.
+5. Biome: `pnpm add -D -E @biomejs/biome`, `pnpm exec biome init`.
+6. shadcn/ui: `pnpm add -D -E shadcn`, `pnpm exec shadcn init --base radix` **[verify CLI v4
    flags]**.
-6. Drizzle: `pnpm add drizzle-orm pg @electric-sql/pglite`, `pnpm add -D -E drizzle-kit
+7. Drizzle: `pnpm add drizzle-orm pg @electric-sql/pglite`, `pnpm add -D -E drizzle-kit
    @types/pg`. `drizzle.config.ts` points `schema` at `src/adapters/db/` and `out` at
    `drizzle/`, dialect `postgresql`.
-7. Better Auth: `pnpm add better-auth`, `pnpm add -D -E auth` **[verify the CLI package
+8. Better Auth: `pnpm add better-auth`, `pnpm add -D -E auth` **[verify the CLI package
    name is `auth`]**. Configure `drizzleAdapter(db, { provider: "pg" })`,
-   `emailAndPassword: { enabled: true }`, `rateLimit: { storage: "database" }`, the
-   client-IP header for the host **[verify option path: `advanced.ipAddress`]**, and the
-   `nextCookies()` plugin last. Mount `toNextJsHandler(auth)` at
-   `src/app/api/auth/[...all]/route.ts`.
-8. Generate: `pnpm exec auth generate --output src/adapters/db/auth-schema.ts`
+   `emailAndPassword: { enabled: true }`, `rateLimit: { storage: "database" }`,
+   `session.expiresIn` at the idle time, the client-IP header for the host **[verify
+   option path: `advanced.ipAddress`]**, and the `nextCookies()` plugin last. Mount
+   `toNextJsHandler(auth)` at `src/app/api/auth/[...all]/route.ts`, wrapped so the body is
+   counted as it arrives (rule §4.1).
+9. Sign-in counters (rule §4.4): a table in `adapters/db/schema.ts` for the account+address
+   pair and the address. A `hooks.before` on `/sign-in/email` refuses or slows by the
+   counters; a `hooks.after` records a failure or resets the pair on success **[verify how
+   an after hook tells a failed sign-in from a successful one]**. Confirm that a sign-in
+   for an unknown email still hashes the password **[verify Better Auth's behaviour; if it
+   does not, the before hook runs one hash for unknown emails]**.
+10. Session reader in `server.ts`: reads the Better Auth session, and revokes and refuses
+    one whose `createdAt` is older than the absolute time **[verify Better Auth has no
+    absolute-lifetime option]**.
+11. Generate: `pnpm exec auth generate --output src/adapters/db/auth-schema.ts`
    **[verify flag]**, then `pnpm exec drizzle-kit generate`. Read the SQL before committing.
-9. Vitest: two projects — `unit` (`environment: "node"`, `tests/unit`, `tests/adapters`) and
+12. Vitest: two projects — `unit` (`environment: "node"`, `tests/unit`, `tests/adapters`) and
    `browser` (`@vitest/browser-playwright`, Chromium, `tests/browser`, `vitest-browser-react`).
-10. Playwright, after `pnpm build`: `webServer` runs `pnpm start` on the built app with a temp PGlite
-    `DATABASE_URL` and placeholder secrets.
+13. Playwright, after `pnpm build`: `webServer` runs `pnpm start` on the built app with a
+    temp PGlite `DATABASE_URL` and placeholder secrets. A fixture fails the test on any
+    `securitypolicyviolation` event or CSP console error.
 
 ## 3. Dockerfile shape
 
@@ -85,26 +104,35 @@ Check the image size and that `.env*` is absent: `docker run --rm <image> ls -a`
 5. Find which header carries the client address behind Render's proxy **[verify:
    `X-Forwarded-For` vs a Render-specific header]**, set it in Better Auth, record it in
    `DECISIONS.md`.
-6. Walking skeleton check: sign up from two different networks and confirm the rate
-   limiter counts them separately.
+6. Walking skeleton check: sign up from two different networks and confirm the counters
+   see two addresses; then send a sign-in with a made-up `X-Forwarded-For` and confirm the
+   counted address does not change.
 
 ## 6. Release
 
 1. Bump `version` in `package.json`; commit; tag `v<version>`; push the tag.
-2. CI runs every check (§5.5 of the rule). If the tag adds a file under `drizzle/` since the
-   previous tag, CI stops before deploying and says so.
+2. CI runs every check (§5.5 of the rule), then one of two paths:
+   - Nothing under `drizzle/` differs from the previous tag: CI triggers the deploy hook,
+     then runs the post-deploy checks (§9) 1 and 2.
+   - Something differs: CI ends without deploying and says so. The deploy hook step does
+     not run on this path.
 3. Migration release only — the human:
-   1. Record the row counts of the main tables, then
-      `pg_dump --format=custom --no-owner "$DIRECT_URL" > backup-<tag>.dump` with Neon's
-      **direct** (not pooled) URL, held on the human's machine only.
-   2. Restore into an empty database (a Neon branch or local PostgreSQL):
-      `pg_restore --no-owner --exit-on-error -d "$EMPTY_URL" backup-<tag>.dump`; the
-      restored row counts match the recorded ones. If they differ, users wrote during the
-      dump: suspend the service on the host, and repeat from step 1.
-   3. The dump holds password hashes and personal data. Keep it encrypted, or delete it
-      once the release is confirmed.
-   3. Trigger the deploy hook by hand.
-4. After deploy: `/api/health` reports the tagged version; `/` answers 200; sign in once.
+   1. Suspend the service on Render, and stop anything else that writes to the database.
+      From here until step 4, nothing writes and no old instance is running.
+   2. Dump straight into encryption, so no plaintext file is written:
+      `pg_dump --format=custom --no-owner "$DIRECT_URL" | <encrypt to the backup public
+      key> > backup-<tag>.dump.enc`, with Neon's **direct** (not pooled) URL, held on the
+      human's machine only.
+   3. Restore into an empty database (a Neon branch or local PostgreSQL), decrypting into
+      the pipe: `<decrypt> backup-<tag>.dump.enc | pg_restore --no-owner --exit-on-error
+      -d "$EMPTY_URL"` **[verify `pg_restore` reads a custom-format dump from a pipe]**. A
+      failure stops the release; resume the service on the old version.
+   4. Deploy the tag so that the service comes back on the new version only **[verify how
+      on Render: feedback reports that resuming triggers a new build, of an unknown
+      commit. Until verified, no migration release is done on Render]**.
+   5. Run the post-deploy checks (§9).
+   6. Keep only the encrypted file, under the backup retention in `DECISIONS.md`; delete
+      the restore-test database.
 
 ## 7. Scheduled backup
 
@@ -114,10 +142,16 @@ GitHub Actions workflow on a schedule: install the PostgreSQL client at or above
 server's major, `pg_dump` with Neon's direct URL from the secret `BACKUP_DATABASE_URL` —
 set on the backup job's environment only, never on the app or another job. Encrypt the
 dump with the public key named in the ADR (the private key is never in CI or in the store),
-upload it to the chosen off-Neon store, fail the job on any non-zero exit. Confirm once
-that a failed run notifies the human **[verify GitHub's notification for scheduled
-workflows]**, and restore an encrypted dump once end to end. Store, retention and key
-location are an ADR.
+upload it to the chosen off-Neon store, fail the job on any non-zero exit. Store,
+retention and key location are an ADR.
+
+Before encrypting, restore the dump into a PostgreSQL service container in the same job
+with `pg_restore --exit-on-error`, and check that its latest applied migration matches
+production and that every table the schema defines exists; either failing fails the job.
+
+Once, before the app holds real data: confirm that a failed run notifies the human
+**[verify GitHub's notification for scheduled workflows]**, and restore an encrypted dump
+end to end, decrypting with the private key.
 
 ## 8. Rollback
 
@@ -128,4 +162,18 @@ location are an ADR.
    redeploy the previous tag. Restoring discards every write made since the dump. Before
    choosing it, dump the current database, state what the restore would lose, and get the
    human's explicit approval of that loss.
-4. After rollback, repeat the post-deploy checks of §6.4.
+4. Run the post-deploy checks (§9).
+
+## 9. Post-deploy checks
+
+Allow two minutes for a cold start, then:
+
+1. `/api/health` answers 200 with the tagged version and the latest migration.
+2. `/` answers 200.
+3. The human signs in and opens one page that reads data. CI runs 1 and 2 only.
+
+## 10. CI runner setup
+
+Each runner starts without a browser: run `pnpm exec playwright install --with-deps
+chromium` after `pnpm install --frozen-lockfile`, before Vitest and Playwright. An app
+with no database skips the PostgreSQL service container and the migration checks.
