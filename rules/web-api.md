@@ -243,7 +243,9 @@ paint happens in the browser.
   stay.
 - A database at a revision the code does not know → refuse to start, log why.
 - PostgreSQL: the app cannot dump its own database. Before a deploy that carries a
-  migration, the human takes a `pg_dump` and confirms it restores into an empty database;
+  migration, the human suspends the service on the host, takes a `pg_dump`, confirms it
+  restores into an empty database, and deploys; the service serves again only on the new
+  version. No write lands after the dump, and no old instance runs during the migration.
   §5.4 stops CI for this. Neon's point-in-time restore is not the backup.
 - An app holding data its users cannot recreate MUST take a backup on a schedule and keep
   it off the database host. A restore from that backup into an empty database MUST have
@@ -273,12 +275,14 @@ paint happens in the browser.
   verification, notifications — needs an ADR naming the provider and its free-tier terms
   before it is built. Until then, a password reset is done by an administrator.
 - Sessions: a random session ID in a cookie with `HttpOnly`, `Secure` and `SameSite=Lax`,
-  the row server-side, rotated on login, deleted on logout, expiring after a stated idle
-  time and a stated absolute time.
+  the row server-side, rotated on login, deleted on logout, expiring after an idle
+  time of 24 hours and an absolute time of 30 days, unless an ADR names other values.
 - Failed logins are counted in the database, so the limit survives a restart. Unless an
   ADR names other values: after 5 consecutive failures an account refuses sign-in for
-  15 minutes, and a client address with 20 failures within 15 minutes is refused for
-  15 minutes. The response is the same whether or not the account exists.
+  15 minutes, and a successful sign-in resets its count; a client address with 20 failures
+  in any 15-minute window is refused for 15 minutes. The response is the same whether or
+  not the account exists, and a sign-in for an unknown account still runs one Argon2
+  verification, so both paths cost the same.
 - Behind the host's TLS proxy, Uvicorn MUST trust that proxy's forwarded headers
   (`--forwarded-allow-ips`, set per host), or `Secure` cookies break and the rate limit
   sees one client address. The walking skeleton (§5.2) confirms two clients are counted
@@ -288,9 +292,11 @@ paint happens in the browser.
   `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';
   img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none';
   base-uri 'self'; form-action 'self'; frame-ancestors 'none'`. The export cannot set
-  headers. `'unsafe-inline'` is there because exported pages carry inline scripts and no
-  server issues a nonce; the other directives still stop any script from loading code
-  from, or sending data to, another origin. Loosening a directive needs an ADR.
+  headers. Exported pages carry inline scripts and no server issues a nonce, so
+  `script-src` needs `'unsafe-inline'`, and this policy does not stop an injected inline
+  script from running. The defence against injection is §4.1: data reaches the DOM only
+  through JSX. The policy limits what such a script can load or send. Changing a directive
+  needs an ADR.
 - Logs go to stdout, one line per event, with a request ID. The app writes no log files.
 - An error response carries the request ID and a message for the user, never SQL, a
   traceback, or an exception's text. `debug` is off outside development.
@@ -381,7 +387,8 @@ test.
   modified or deleted, if the app persists data. A PostgreSQL project adds the adapter
   tests and migrations against a PostgreSQL service container.
 - Push / PR, contract: regenerate `openapi.json` and `schema.d.ts`; fail on any diff.
-- Push / PR, frontend: `pnpm install --frozen-lockfile`, Biome, `pnpm build`, Vitest in
+- Push / PR, frontend: `pnpm install --frozen-lockfile`, install Chromium on the runner,
+  Biome, `pnpm build`, Vitest in
   Node and Chromium including the boundary check, Playwright against the backend serving
   `out/`.
 - Then build the image and run the smoke test against it.
@@ -422,6 +429,7 @@ the right endpoint and the result is shown — not the rule itself.
   user sees: text, `disabled`, `aria-invalid`, the URL after navigation.
 - One test submits input containing markup and asserts it comes back as text.
 - A Content-Security-Policy violation reported in the browser fails the Playwright run.
+- A request body just over 1 MB is refused with 413; one just under is accepted.
 - Waiting real time — `time.sleep()`, `setTimeout`, `page.waitForTimeout` — is PROHIBITED;
   wait for an element, a URL, or a response.
 

@@ -93,8 +93,9 @@ for `/healthz`.
 
 - Push / PR job, in order: `uv sync --locked` → Ruff → mypy → pytest → `alembic check` →
   fail if a file under `migrations/versions/` that exists on `main` was modified or
-  deleted → PostgreSQL service container: adapter tests + `alembic upgrade head` →
-  regenerate the contract (§2), `git diff --exit-code` → `pnpm install --frozen-lockfile`
+  deleted → PostgreSQL projects only: PostgreSQL service container, adapter tests +
+  `alembic upgrade head` → regenerate the contract (§2), `git diff --exit-code` →
+  `pnpm install --frozen-lockfile` → `pnpm exec playwright install --with-deps chromium`
   → Biome → `pnpm build` → Vitest → Playwright → build image, smoke test.
 - Tag job: all of the above → check the tag equals the `pyproject.toml` version → then
   one of two paths:
@@ -107,16 +108,16 @@ for `/healthz`.
 
 PostgreSQL only. On SQLite, `adapters/migrate.py` backs the file up itself at start.
 
-1. Record the row counts of the main tables, then
-   `pg_dump --format=custom --no-owner "$DIRECT_URL" > backup-<tag>.dump`. On Neon use the
+1. Suspend the service on the host. From here until step 4, nothing writes to the
+   database and no old instance is running.
+2. `pg_dump --format=custom --no-owner "$DIRECT_URL" > backup-<tag>.dump`. On Neon use the
    **direct** (not pooled) URL, held on the human's machine only.
-2. Restore into an empty database (a Neon branch or local PostgreSQL):
-   `pg_restore --no-owner --exit-on-error -d "$EMPTY_URL" backup-<tag>.dump`; the restored
-   row counts match the recorded ones. If they differ, users wrote during the dump: suspend
-   the service on the host, and repeat from step 1.
-3. Deploy the tag.
-4. Run the post-deploy checks (§12).
-5. The dump holds personal data and password hashes. Keep it encrypted, or delete it once
+3. Restore into an empty database (a Neon branch or local PostgreSQL):
+   `pg_restore --no-owner --exit-on-error -d "$EMPTY_URL" backup-<tag>.dump`. A failure
+   stops the release; resume the service on the old version.
+4. Deploy the tag so that the service comes back on the new version only.
+5. Run the post-deploy checks (§12).
+6. The dump holds personal data and password hashes. Keep it encrypted, or delete it once
    the release is confirmed.
 
 ## 10. Scheduled backup (rule §4.3)
@@ -167,6 +168,8 @@ Allow two minutes for a cold start, then:
 - Render: which forwarded header carries the client address, and the value for
   `--forwarded-allow-ips`.
 - Render deploy hook mechanics, and how to turn off auto-deploy.
+- Render: how to deploy a tag to a suspended service so that it resumes on the new version
+  without the old one serving first.
 - `pg_dump` / `pg_restore` flags for Neon.
 - Dockerfile pattern for copying a pinned uv binary and installing a pinned pnpm in the
   Node stage.
