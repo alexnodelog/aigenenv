@@ -48,7 +48,7 @@ Track B (§1 Hosting).
 | Auth — Track A | `st.login` (OIDC, `streamlit[auth]`) + an email allowlist | — | A password form written in Streamlit; streamlit-authenticator |
 | Accounts — Track B | Users table in the app's own database; server-side session table, opaque session-ID cookie; passwords hashed with Argon2 via pwdlib | — | Accounts held by a hosting or database vendor's auth service (Supabase Auth, Firebase Auth and the like); passlib; JWT for browser sessions; identity kept in a signed client-side cookie; tokens in `localStorage` |
 | User file uploads | None | Storage chosen by ADR | The local disk of a host without a persistent disk |
-| Background work | None — work finishes inside the request or rerun | FastAPI `BackgroundTasks` for best-effort, non-durable follow-ups | Threads or tasks started from a handler that must outlive it; a job-queue service (Celery, RQ) |
+| Background work | None — work finishes inside the request or rerun | FastAPI `BackgroundTasks` for best-effort, non-durable follow-ups; a durable job mechanism, chosen by ADR, for work whose loss is unacceptable | Threads or tasks started from a handler that must outlive it |
 | Server — Track B | Uvicorn, one process | — | Multiple workers or processes on SQLite |
 | Lint / format | Ruff | — | Black + isort + flake8 |
 | Type check | mypy strict on `domain/`, `services/` | pyright | — |
@@ -154,18 +154,24 @@ session, and every session shares the process.
 - Polling uses `st.fragment(run_every=...)`. `while True` loops and `time.sleep()` in the
   script are PROHIBITED.
 
-Track B — one request, one thread from Uvicorn's pool.
+Track B — FastAPI runs each plain `def` handler on a worker thread.
 
-- Route handlers are plain `def` using the sync `Session`; FastAPI runs them in a
-  threadpool. An `async def` handler MUST NOT call anything that blocks — a sync DB call, a
-  sync HTTP client, file I/O — because it stalls every other request. Mixing the two styles
-  in one handler is a defect.
+- Route handlers are plain `def` using the sync `Session`. An `async def` handler runs on
+  the event loop shared by every request, so it MUST NOT call anything that blocks — a sync
+  DB call, a sync HTTP client, file I/O. Mixing the two styles in one handler is a defect.
 - One request is one transaction. The request-scoped session dependency commits after a
   successful handler and rolls back on any exception. Services and adapters MUST NOT call
   `commit()`.
 - `GET` and `HEAD` never change state. Every state-changing request is `POST`, `PUT`,
   `PATCH` or `DELETE` and carries a CSRF token, sent by htmx through `hx-headers` on
   `<body>`.
+- Every string and list field in a request schema has a maximum length, and every list a
+  maximum page size. A request body of up to 1 MiB (1,048,576 bytes) is accepted; one byte
+  more is refused with 413, unless an ADR raises the limit for one route. Bytes are counted
+  as they arrive, also when the request has no `Content-Length`, and the request is refused
+  as soon as the count passes the limit, without the body being read whole.
+- A URL from data goes into `href` or `src` only after its scheme is checked to be `http:`
+  or `https:`; autoescaping does not stop a `javascript:` URL.
 - A route that answers htmx returns a fragment from `templates/partials/` when the
   `HX-Request` header is present. Any URL a user can land on — directly, by bookmark, or
   through `hx-push-url` — MUST render a full page when requested without that header.
@@ -210,14 +216,20 @@ Track B — one request, one thread from Uvicorn's pool.
   head`. On failure it exits non-zero, the server does not start, and original and backup
   stay.
 - PostgreSQL: the app cannot dump its own database. Before a deploy that carries a
-  migration, the human takes a `pg_dump` and confirms it restores into an empty database;
-  §5.4 stops CI for this. The provider's point-in-time restore is not the backup.
+  migration, the human suspends the service on the host, takes a `pg_dump`, confirms it
+  restores into an empty database, and deploys; the service serves again only on the new
+  version. The web service is the only writer to the database; anything else that writes
+  is stopped too. No write lands after the dump, and no old instance runs during the
+  migration. §5.4 stops CI for this. The provider's point-in-time restore is not the backup.
 - An app holding data its users cannot recreate MUST take a backup on a schedule and keep
   it off the database host. A restore from that backup into an empty database MUST have
   succeeded once before the app holds real data. Backups are encrypted before they leave the CI
   job, with a key kept apart from the store that holds them. A failed backup run MUST fail a
-  scheduled CI job whose failure notification reaches the human. Schedule, store and key
-  location are recorded in `DECISIONS.md`.
+  scheduled CI job whose failure notification reaches the human. Each run restores its own
+  dump into an empty database and checks, as a minimum proof that the dump restores, its
+  Alembic revision and that every table the models define exists, before keeping it; a
+  failed check fails the run. The data loss users can accept, the schedule that follows
+  from it, retention, store and key location are recorded in `DECISIONS.md`.
 - A database at a revision the code does not know → refuse to start, log why.
 - Shipped revisions are append-only: a file under `migrations/versions/`, once on `main`,
   is never modified or deleted. Fixes are new revisions.
@@ -240,11 +252,36 @@ Track B — one request, one thread from Uvicorn's pool.
   before it is built. Until then, a password reset is done by an administrator.
 - Track B sessions: a random session ID in a cookie with `HttpOnly`, `Secure` and
   `SameSite=Lax`, the row server-side, rotated on login, deleted on logout, expiring after
-  a stated idle time and a stated absolute time. Failed logins are rate-limited per account
-  and per client address, and a failed login says the same thing whether or not the account
-  exists. Behind the host's TLS proxy, Uvicorn MUST trust that proxy's forwarded headers
+  an idle time of 24 hours and an absolute time of 30 days, unless an ADR names other
+  values.
+- Track B failed logins are counted in the database, so the limits survive a restart. Two
+  separate counters, unless an ADR names other values:
+  - Account and client address together: after 5 consecutive failures the pair is refused
+    for 15 minutes. Its count resets on success and when the refusal expires. Keying by the
+    pair means an attacker elsewhere cannot lock the owner out.
+  - Client address alone: failures in the last 15 minutes, rolling, never reset. While
+    there are 20 or more, the address may make one sign-in attempt per minute; it is
+    slowed, not blocked, so users sharing the address can still sign in.
+- The start of a refusal or a slowdown is logged once as a warning; the attempts it
+  refuses are not logged one by one.
+- A sign-in response is the same whether or not the account exists, and a sign-in for an
+  unknown account still runs one Argon2 verification, so both paths cost the same.
+- Track B behind the host's TLS proxy: Uvicorn MUST trust that proxy's forwarded headers
   (`--forwarded-allow-ips`, set per host), or `Secure` cookies and `url_for` produce
-  `http://` links.
+  `http://` links and the rate limit sees one client address. The walking skeleton (§5.2)
+  confirms two clients are counted separately, and that an `X-Forwarded-For` header the
+  client sets itself does not change the address counted.
+- Track B sets, on every response, `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: strict-origin-when-cross-origin`, and this Content-Security-Policy:
+  `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:;
+  font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self';
+  form-action 'self'; frame-ancestors 'none'`. Every page sets htmx's `allowEval` and
+  `includeIndicatorStyles` to `false` through the `htmx-config` meta tag, so the policy
+  needs neither `'unsafe-eval'` nor `'unsafe-inline'`; the `.htmx-indicator` rules go in
+  `assets/app.css` instead. Inline `<script>` and `style`
+  attributes, `hx-on`, `js:` values in `hx-vals`, and trigger filters are therefore
+  PROHIBITED; behaviour goes in a file under `static/`. Alpine.js, when adopted, uses its
+  CSP build. Loosening a directive needs an ADR.
 - Track A: `st.login` establishes who the user is, not what they may do. The composition
   root checks the email against the allowlist from `Settings` before any page runs and
   stops otherwise. A Track A app on the public internet without login MUST hold only
@@ -299,6 +336,7 @@ stops the container, and exits 0 — or non-zero with the reason.
   is a new SQLite file migrated from empty — or, for a PostgreSQL project in CI, an empty
   database in the service container — and every secret is a test placeholder. Login is not
   exercised against a real identity provider.
+- Track B: every header §4.4 requires is present with its required value.
 - Timeouts: healthy within 60 s, `/` within 10 s, stopped within 10 s. A timeout fails the
   test.
 
@@ -357,6 +395,8 @@ right use case and the result is shown — not the rule itself.
 - Track B: one test renders user input containing `<script>` and asserts it comes back
   escaped.
 - Track B: a state-changing request without a CSRF token is rejected.
+- Track B: a request body of exactly 1 MiB is accepted and one of 1 MiB + 1 byte is refused
+  with 413, each with and without `Content-Length`.
 - Track A: `AppTest.from_function` runs the function's *source* as a standalone script. The
   function MUST do its own imports and receive everything else through `args` / `kwargs`;
   a closure variable or a name from the test module does not exist inside it.
