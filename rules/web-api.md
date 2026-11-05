@@ -37,7 +37,7 @@ designed UI (`web-python`), or if one person uses it on one machine with local d
 | Config | Frozen dataclass built from `os.environ` in `config.py`; `.env` loaded in development by `uv run --env-file .env` | pydantic-settings | `python-dotenv` calls in application code; `os.environ` read anywhere but `config.py`; `process.env` or `NEXT_PUBLIC_*` in frontend code |
 | Accounts | Users table in the app's own database; server-side session table, opaque session-ID cookie; passwords hashed with Argon2 via pwdlib | — | A vendor's auth service (Supabase Auth, Firebase Auth, Clerk, Auth0); passlib; JWT for browser sessions; tokens in `localStorage` or in a cookie scripts can read |
 | User file uploads | None | Storage chosen by ADR | The container's filesystem on a host without a persistent disk |
-| Background work | None — work finishes inside the request | FastAPI `BackgroundTasks` for best-effort, non-durable follow-ups | Threads or tasks started from a handler that must outlive it; a job-queue service (Celery, RQ) |
+| Background work | None — work finishes inside the request | FastAPI `BackgroundTasks` for best-effort, non-durable follow-ups; a durable job mechanism, chosen by ADR, for work whose loss is unacceptable | Threads or tasks started from a handler that must outlive it |
 | Server | Uvicorn, one process | — | Multiple workers or processes on SQLite |
 | Lint / format | Ruff; Biome | ESLint + Prettier, for the frontend | Black + isort + flake8; `next lint` (removed in Next.js 16) |
 | Type check | mypy strict on `domain/`, `services/`; `tsc --noEmit` before `next build` | pyright | `typescript.ignoreBuildErrors` |
@@ -160,6 +160,9 @@ Backend — one request, one thread from Uvicorn's pool.
   Each one validates its input and resolves the current user itself; the use case checks
   what that user may do. Hiding a page or a button is not authorization.
 - `GET` and `HEAD` never change state.
+- Every string and list field in an API schema has a maximum length, and every list
+  endpoint a maximum page size. A request body over 1 MB is refused with 413 unless an ADR
+  raises the limit for one endpoint.
 - Cross-site request forgery: every state-changing request MUST carry the custom header
   the API client in `src/api/client.ts` sets on every request, and is refused with 403
   without it, or when its `Origin` header is present and is not the app's own origin from
@@ -246,8 +249,10 @@ paint happens in the browser.
   it off the database host. A restore from that backup into an empty database MUST have
   succeeded once before the app holds real data. Backups are encrypted before they leave
   the CI job, with a key kept apart from the store that holds them. A failed backup run
-  MUST fail a scheduled CI job whose failure notification reaches the human. Schedule,
-  store and key location are recorded in `DECISIONS.md`.
+  MUST fail a scheduled CI job whose failure notification reaches the human. Each run
+  restores its own dump into an empty database and checks its Alembic revision before
+  keeping it; a failed restore fails the run. Schedule, retention, store and key location
+  are recorded in `DECISIONS.md`.
 - Shipped revisions are append-only: a file under `migrations/versions/`, once on `main`,
   is never modified or deleted. Fixes are new revisions.
 
@@ -269,17 +274,23 @@ paint happens in the browser.
   before it is built. Until then, a password reset is done by an administrator.
 - Sessions: a random session ID in a cookie with `HttpOnly`, `Secure` and `SameSite=Lax`,
   the row server-side, rotated on login, deleted on logout, expiring after a stated idle
-  time and a stated absolute time. Failed logins are rate-limited per account and per
-  client address, and a failed login says the same thing whether or not the account
-  exists.
+  time and a stated absolute time.
+- Failed logins are counted in the database, so the limit survives a restart. Unless an
+  ADR names other values: after 5 consecutive failures an account refuses sign-in for
+  15 minutes, and a client address with 20 failures within 15 minutes is refused for
+  15 minutes. The response is the same whether or not the account exists.
 - Behind the host's TLS proxy, Uvicorn MUST trust that proxy's forwarded headers
   (`--forwarded-allow-ips`, set per host), or `Secure` cookies break and the rate limit
   sees one client address. The walking skeleton (§5.2) confirms two clients are counted
   separately.
 - The backend sets, on every response, `X-Content-Type-Options: nosniff`,
-  `Referrer-Policy: strict-origin-when-cross-origin`, and a Content-Security-Policy with at
-  least `frame-ancestors 'none'`, `base-uri 'self'`, `object-src 'none'` and
-  `form-action 'self'`. The export cannot set headers.
+  `Referrer-Policy: strict-origin-when-cross-origin`, and this Content-Security-Policy:
+  `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';
+  img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none';
+  base-uri 'self'; form-action 'self'; frame-ancestors 'none'`. The export cannot set
+  headers. `'unsafe-inline'` is there because exported pages carry inline scripts and no
+  server issues a nonce; the other directives still stop any script from loading code
+  from, or sending data to, another origin. Loosening a directive needs an ADR.
 - Logs go to stdout, one line per event, with a request ID. The app writes no log files.
 - An error response carries the request ID and a message for the user, never SQL, a
   traceback, or an exception's text. `debug` is off outside development.
@@ -410,6 +421,7 @@ the right endpoint and the result is shown — not the rule itself.
 - Controls are found by role and label text, never by CSS selector or id. Assert what the
   user sees: text, `disabled`, `aria-invalid`, the URL after navigation.
 - One test submits input containing markup and asserts it comes back as text.
+- A Content-Security-Policy violation reported in the browser fails the Playwright run.
 - Waiting real time — `time.sleep()`, `setTimeout`, `page.waitForTimeout` — is PROHIBITED;
   wait for an element, a URL, or a response.
 

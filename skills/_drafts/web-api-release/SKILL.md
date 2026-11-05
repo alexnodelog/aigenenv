@@ -96,10 +96,12 @@ for `/healthz`.
   deleted → PostgreSQL service container: adapter tests + `alembic upgrade head` →
   regenerate the contract (§2), `git diff --exit-code` → `pnpm install --frozen-lockfile`
   → Biome → `pnpm build` → Vitest → Playwright → build image, smoke test.
-- Tag job: all of the above → check the tag equals the `pyproject.toml` version → if
-  anything under `migrations/versions/` differs from the previous tag, stop → trigger the
-  host's deploy hook → poll `/healthz` for the version, allowing two minutes for a cold
-  start → `GET /`.
+- Tag job: all of the above → check the tag equals the `pyproject.toml` version → then
+  one of two paths:
+  - Nothing under `migrations/versions/` differs from the previous tag: trigger the host's
+    deploy hook → run the post-deploy checks (§12).
+  - Something differs: end the job without deploying. The deploy hook step does not run on
+    this path. The human deploys by §9.
 
 ## 9. Deploy carrying a migration (rule §4.3, §5.4)
 
@@ -113,7 +115,7 @@ PostgreSQL only. On SQLite, `adapters/migrate.py` backs the file up itself at st
    row counts match the recorded ones. If they differ, users wrote during the dump: suspend
    the service on the host, and repeat from step 1.
 3. Deploy the tag.
-4. Confirm the version and `/`.
+4. Run the post-deploy checks (§12).
 5. The dump holds personal data and password hashes. Keep it encrypted, or delete it once
    the release is confirmed.
 
@@ -127,8 +129,12 @@ Only for an app holding data its users cannot recreate.
 - SQLite on a VM disk: CI cannot reach it. The method is an ADR.
 - Either way: encrypt the dump with the public key named in the ADR (the private key is
   never in CI or in the store), upload it to the chosen off-host store, fail the job on any
-  non-zero exit. Confirm once that a failed run notifies the human, and restore an
-  encrypted dump once end to end.
+  non-zero exit.
+- Before encrypting, restore the dump into a PostgreSQL service container in the same job
+  with `pg_restore --exit-on-error`, and check its `alembic_version` matches the
+  production revision; a mismatch fails the job.
+- Once, before the app holds real data: confirm that a failed run notifies the human, and
+  restore an encrypted dump end to end, decrypting with the private key.
 
 ## 11. Rollback (rule §5.4)
 
@@ -140,7 +146,15 @@ Only for an app holding data its users cannot recreate.
    redeploy the previous tag. Restoring discards every write made since the dump. Before
    choosing it, dump the current database, state what the restore would lose, and get the
    human's explicit approval of that loss.
-4. After rollback, repeat the post-deploy checks of §9.
+4. Run the post-deploy checks (§12).
+
+## 12. Post-deploy checks (rule §5.3, §5.4)
+
+Allow two minutes for a cold start, then:
+
+1. `/healthz` answers 200 with the expected version and DB revision.
+2. `/` answers 200 with HTML.
+3. The human signs in and opens one page that reads data. CI runs 1 and 2 only.
 
 ## Unverified — check before finalizing
 
