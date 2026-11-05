@@ -169,7 +169,9 @@ Allow two minutes for a cold start, then:
   `--forwarded-allow-ips`.
 - Render deploy hook mechanics, and how to turn off auto-deploy.
 - Render: how to deploy a tag to a suspended service so that it resumes on the new version
-  without the old one serving first.
+  without the old one serving first. Render feedback reports that resuming triggers a new
+  build; which commit it builds is unknown. Until verified, no migration deploy is done
+  on Render.
 - `pg_dump` / `pg_restore` flags for Neon.
 - Dockerfile pattern for copying a pinned uv binary and installing a pinned pnpm in the
   Node stage.

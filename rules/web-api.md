@@ -162,7 +162,9 @@ Backend — one request, one thread from Uvicorn's pool.
 - `GET` and `HEAD` never change state.
 - Every string and list field in an API schema has a maximum length, and every list
   endpoint a maximum page size. A request body over 1 MB is refused with 413 unless an ADR
-  raises the limit for one endpoint.
+  raises the limit for one endpoint. Bytes are counted as they arrive, also when the
+  request has no `Content-Length`, and the request is refused at the limit without the
+  body being read whole.
 - Cross-site request forgery: every state-changing request MUST carry the custom header
   the API client in `src/api/client.ts` sets on every request, and is refused with 403
   without it, or when its `Origin` header is present and is not the app's own origin from
@@ -252,9 +254,10 @@ paint happens in the browser.
   succeeded once before the app holds real data. Backups are encrypted before they leave
   the CI job, with a key kept apart from the store that holds them. A failed backup run
   MUST fail a scheduled CI job whose failure notification reaches the human. Each run
-  restores its own dump into an empty database and checks its Alembic revision before
-  keeping it; a failed restore fails the run. Schedule, retention, store and key location
-  are recorded in `DECISIONS.md`.
+  restores its own dump into an empty database and checks its Alembic revision and that
+  every table the models define exists, before keeping it; a failed check fails the run.
+  The data loss users can accept, the schedule that follows from it, retention, store and
+  key location are recorded in `DECISIONS.md`.
 - Shipped revisions are append-only: a file under `migrations/versions/`, once on `main`,
   is never modified or deleted. Fixes are new revisions.
 
@@ -278,15 +281,18 @@ paint happens in the browser.
   the row server-side, rotated on login, deleted on logout, expiring after an idle
   time of 24 hours and an absolute time of 30 days, unless an ADR names other values.
 - Failed logins are counted in the database, so the limit survives a restart. Unless an
-  ADR names other values: after 5 consecutive failures an account refuses sign-in for
-  15 minutes, and a successful sign-in resets its count; a client address with 20 failures
-  in any 15-minute window is refused for 15 minutes. The response is the same whether or
+  ADR names other values: after 5 consecutive failures for one account from one client
+  address, that pair is refused for 15 minutes; a client address with 20 failures in any
+  15-minute window is refused for 15 minutes. A pair's count resets on success and when
+  its refusal expires. The limit is keyed by account and address together so that an
+  attacker elsewhere cannot lock the owner out. Each refusal is logged as a warning. The response is the same whether or
   not the account exists, and a sign-in for an unknown account still runs one Argon2
   verification, so both paths cost the same.
 - Behind the host's TLS proxy, Uvicorn MUST trust that proxy's forwarded headers
   (`--forwarded-allow-ips`, set per host), or `Secure` cookies break and the rate limit
   sees one client address. The walking skeleton (§5.2) confirms two clients are counted
-  separately.
+  separately, and that an `X-Forwarded-For` header the client sets itself does not change
+  the address counted.
 - The backend sets, on every response, `X-Content-Type-Options: nosniff`,
   `Referrer-Policy: strict-origin-when-cross-origin`, and this Content-Security-Policy:
   `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';
@@ -429,7 +435,8 @@ the right endpoint and the result is shown — not the rule itself.
   user sees: text, `disabled`, `aria-invalid`, the URL after navigation.
 - One test submits input containing markup and asserts it comes back as text.
 - A Content-Security-Policy violation reported in the browser fails the Playwright run.
-- A request body just over 1 MB is refused with 413; one just under is accepted.
+- A request body just over 1 MB is refused with 413, with and without `Content-Length`;
+  one just under is accepted.
 - Waiting real time — `time.sleep()`, `setTimeout`, `page.waitForTimeout` — is PROHIBITED;
   wait for an element, a URL, or a response.
 
