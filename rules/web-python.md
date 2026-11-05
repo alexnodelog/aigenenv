@@ -170,8 +170,6 @@ Track B — FastAPI runs each plain `def` handler on a worker thread.
   more is refused with 413, unless an ADR raises the limit for one route. Bytes are counted
   as they arrive, also when the request has no `Content-Length`, and the request is refused
   as soon as the count passes the limit, without the body being read whole.
-- A URL from data goes into `href` or `src` only after its scheme is checked to be `http:`
-  or `https:`; autoescaping does not stop a `javascript:` URL.
 - A route that answers htmx returns a fragment from `templates/partials/` when the
   `HX-Request` header is present. Any URL a user can land on — directly, by bookmark, or
   through `hx-push-url` — MUST render a full page when requested without that header.
