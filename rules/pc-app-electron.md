@@ -268,11 +268,12 @@ Procedure: skill `electron-release`.
   `grantFileProtocolExtraPrivileges` false; `enableCookieEncryption`,
   `enableEmbeddedAsarIntegrityValidation` and `onlyLoadAppFromAsar` true.
 - **Declared target OSes** are the ones `README.md` lists under its install section. That
-  list is the single source for the electron-builder targets, the first-week builds, and
+  list is the single source for the electron-builder targets, the walking-skeleton builds, and
   the CI matrix; adding or dropping an OS means editing it there first.
-- Build and package once on every declared target OS in the first week, as a walking
-  skeleton — on CI where the developer has no such machine. Leaving the first
-  cross-platform build until release is PROHIBITED.
+- Before any feature beyond it is built, a walking skeleton — one window, the database
+  with its first migration, the protocol handler — is built, packaged and passes
+  `--self-check` on every declared target OS, on CI where the developer has no such
+  machine.
 
 ### 5.3 Self-check
 
