@@ -41,10 +41,15 @@ protocol.registerSchemesAsPrivileged([
 After `ready`, `protocol.handle("app", handler)`. The handler:
 
 1. Parses `request.url`; refuses any host other than the one the app uses (`app://app/`).
-2. Decodes the path, joins it to the renderer build directory, normalizes, and refuses
-   (404) if the result is outside that directory.
-3. Serves `index.html` for `/`.
-4. Returns `net.fetch(pathToFileURL(file).toString())` with the CSP and
+2. Decodes the pathname once with `decodeURIComponent`; a decode error → 400.
+3. Refuses (404) a decoded path containing `\`, a NUL byte, or a `..` segment — a
+   double-encoded `%252e%252e` decodes to `%2e%2e` and is then served as a literal,
+   nonexistent name.
+4. `path.resolve(rendererDir, "." + decoded)`; refuses (404) unless
+   `path.relative(rendererDir, resolved)` is non-empty, does not start with `..`, and is
+   not absolute. The renderer build inside `app.asar` holds no symlinks.
+5. Serves `index.html` for `/`.
+6. Returns `net.fetch(pathToFileURL(file).toString())` with the CSP and
    `X-Content-Type-Options` headers of rule §4.4 added.
 
 Window load:
@@ -122,19 +127,22 @@ if (selfCheck) {
 
 Then the normal start with credentials disabled, the window created with `show: false`,
 and a `selfCheck:ready` message from the renderer after first render. On ready: print the
-version, `app.quit()`, exit 0. A timer per timeout of rule §5.3 exits non-zero with the
-reason.
+version, close the database, remove `root` with `rmSync(root, { recursive: true, force:
+true })`, exit 0. A timer per timeout of rule §5.3, and any error, prints the reason,
+removes `root` the same way, and exits non-zero.
 
 ## 6. Whole-app tests (rule §6)
 
 ```ts
 const app = await _electron.launch({
   args: ["out/main/index.js"],
-  env: { ...process.env, <APP>_TEST_USER_DATA: tmpDir },
+  env: { ...process.env, E2E_USER_DATA_DIR: tmpDir },
 });
 ```
 
-`main/index.ts` honours `<APP>_TEST_USER_DATA` only when `app.isPackaged` is false.
+`main/index.ts`, before `ready`, calls `app.setPath("userData", process.env.E2E_USER_DATA_DIR)`
+only when `app.isPackaged` is false and the variable is set, and derives every `Paths`
+entry from it.
 Dialog stub:
 
 ```ts

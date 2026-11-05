@@ -9,7 +9,8 @@ choices only; every other prohibition sits with the rule it belongs to.
 
 Wrong archetype if the UI does not need web technology or the app needs Python libraries
 (`pc-app-python`), if two people share the data (a web archetype), or if there is no
-window (a script).
+window (a script). Tauri is not an alternative within this file: nothing below applies to
+it, and choosing it needs an ADR and its own rule.
 
 ---
 
@@ -20,7 +21,7 @@ window (a script).
 | Node.js (tooling) | An LTS line, installed by pnpm, pinned in `package.json` `devEngines.runtime` | — | Odd-numbered (non-LTS) majors; `.nvmrc`, nvm, fnm, Volta as the version record |
 | Packaging | pnpm, standalone install, exact version in `packageManager`; `pnpm-lock.yaml`; `nodeLinker: hoisted` | — | npm, yarn, bun; Corepack; `npx` in scripts or docs |
 | Language | TypeScript, `strict: true`, ES modules | — | Plain JavaScript in new code |
-| Shell | Electron, one of the three supported majors, exact version | Tauri 2, when installer size or memory is a stated product requirement | A major outside the support window; `@electron/remote`; `<webview>` |
+| Shell | Electron, one of the three supported majors, exact version | — | A major outside the support window; `@electron/remote`; `<webview>` |
 | Build | electron-vite 6: main, preload and renderer from one `electron.vite.config.ts` | — | `vite-plugin-electron` (a different project with a similar name); Electron Forge's Vite plugin; webpack |
 | UI | React | — | — |
 | Styling | Tailwind CSS v4 via `@tailwindcss/vite`; shadcn/ui, Radix base, copied into `src/renderer/src/components/ui/` | CSS Modules | `tailwind.config.js`, `@tailwind` directives; CSS-in-JS; full component kits installed as packages (MUI, Chakra, Mantine, Ant Design) |
@@ -128,18 +129,22 @@ window (a script).
   `shared/ipc.ts`. A main-to-renderer event is exposed as a function that takes a
   callback and returns an unsubscribe; the callback never receives the
   `IpcRendererEvent`.
-- Every handler first checks that `event.senderFrame` belongs to the app's own origin
-  (§4.2), then parses the payload with Zod. Either failure is refused before any use case
-  runs.
+- Every handler first checks that `event.senderFrame` is the top-level frame of a
+  window the main process created and that its URL has the app's own origin (§4.2), then
+  parses the payload with Zod. Any failure is refused before a use case runs. The app
+  loads no frames of its own.
 - A handler returns `{ ok: true, value }` or `{ ok: false, error: { code, message } }`.
-  An expected failure is returned as a value and shown next to its field. Unexpected
-  errors are caught by one wrapper around every handler, logged, and returned as
-  `{ code: "internal" }`: a thrown error reaches the renderer with its message.
+  An expected failure is returned as a value and shown next to its field. One wrapper
+  around every handler catches unexpected errors, logs them in full, and returns only
+  `{ code: "internal" }` with a fixed message. A handler never throws to the renderer:
+  Electron would pass the error's message across, paths and SQL included.
 - Only plain data crosses IPC: values whose types are declared in `shared/`. Class
   instances, functions and Buffers that the renderer would display are converted first.
-- A use case on the main process returns within ~100 ms; better-sqlite3 is synchronous
-  and a slow call freezes every window. Longer work runs in a `utilityProcess`, which
-  opens its own database connection and reports progress and results by message.
+- better-sqlite3 is synchronous, and a slow call on the main process freezes every
+  window. Work whose duration grows with the user's data — imports, exports, scans,
+  bulk updates — or that can exceed 100 ms on the user's data runs in a
+  `utilityProcess`, which opens its own database connection and reports progress and
+  results by message.
 - Navigation is limited: `will-navigate` is prevented for any URL outside the app's
   origin, and `setWindowOpenHandler` returns `deny`. A link meant for the browser goes
   through `shell.openExternal`, only after the main process confirms the URL is
@@ -203,8 +208,9 @@ window (a script).
   file in `logs`, rotated by size. The renderer reports errors through a bridge function;
   it writes no log itself.
 - `main/index.ts` installs `uncaughtException` and `unhandledRejection` handlers before
-  the first window opens. They log and show what failed and what to do, with a control
-  that opens the log directory.
+  the first window opens. They log the error, show what failed and what to do with a
+  control that opens the log directory, then quit with a non-zero exit code. The process
+  never continues after either.
 - The renderer root has an error boundary, and window `error` and `unhandledrejection`
   listeners report through the bridge. The window shows what failed and what to try.
 - A failed action MUST leave no partial write in the DB or on disk. The window MAY show
@@ -234,6 +240,9 @@ Procedure: skill `electron-release`.
   Electron. `@types/node` follows Electron's Node major.
 - `electron`, `electron-vite` and `electron-builder` are locked devDependencies with exact
   versions. One Electron version per release.
+- The supported majors are the three newest stable lines on Electron's release schedule
+  (releases.electronjs.org). Each release checks it; a major that has left support is
+  upgraded before the release, not after.
 
 ### 5.2 Build
 
@@ -273,8 +282,8 @@ with the reason.
 
 ### 5.4 Package
 
-- Packaging is done only by electron-builder with the committed `electron-builder.yml`,
-  through `pnpm package`, after the build on each OS. CI's package step calls that script;
+- Packaging is done only through `pnpm package`, by the packager §1 names with its
+  committed configuration, after the build on each OS. CI's package step calls that script;
   inline packaging commands are PROHIBITED.
 - `version` in `package.json` is the single source; the installer, the About dialog and
   artifact names read it. CI fails a tag that does not match.
@@ -310,8 +319,11 @@ reaches the right use case and the result is shown — not the rule itself.
 
 - The fake bridge in renderer tests is typed by the preload's exported type, so a fake
   that drifts from the real bridge fails the type check.
-- Every handler is tested with a payload its schema refuses and with a sender from
-  another origin; both are refused before the use case is called.
+- Every handler is tested with a payload its schema refuses, a sender from another
+  origin, and a sender that is not a top-level frame; each is refused before the use case
+  is called.
+- The protocol handler is tested with `..`, its percent-encoded and double-encoded forms,
+  a backslash, and a malformed encoding; each is refused.
 - Each Playwright run starts the app with its own empty data directory in a temp dir. A
   test that passes only because the developer's data exists is a defect.
 - Every native dialog a whole-app test reaches is stubbed in the main process through
@@ -339,7 +351,7 @@ around a prohibition when something does not work.
    Playwright runs against `out/`; the packaged app is proven by `--self-check`.
 5. Setting `webSecurity: false` to get past a CORS or CSP error.
 6. Switching to Electron Forge or Tauri to escape an electron-builder error. A build
-   error is not grounds for the Alternative's ADR.
+   error is not grounds for either ADR.
 
 ---
 
