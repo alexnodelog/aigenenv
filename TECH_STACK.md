@@ -219,7 +219,7 @@ check before first use.
 
 | Category | Default | Alternative | Prohibited |
 |---|---|---|---|
-| Shell | **Electron**, one of the three supported majors | **Tauri 2** — when installer size or memory is a stated product requirement | — |
+| Shell | **Electron**, one of the three supported majors | — | — |
 | Renderer UI | React + TypeScript | — | — |
 | Build tooling | electron-vite | — | `vite-plugin-electron` (a different project with a similar name) |
 | Styling | Tailwind CSS v4 + shadcn/ui | CSS Modules | — |
@@ -236,7 +236,9 @@ check before first use.
 real, but it moves custom native behaviour into Rust and pushes WebView compatibility
 testing onto the developer, while Electron keeps the whole application in one language
 with a mature packaging and auto-update ecosystem. For one developer maintaining a project
-for years, a second language costs more than a hundred megabytes on disk.
+for years, a second language costs more than a hundred megabytes on disk. Tauri shares
+none of Electron's build, IPC, packaging or test tooling, so it is not an Alternative row
+here: a project that needs it writes an ADR and its own rule.
 
 **Why no state or data library by default.** Same reasoning as `web-ts`: the renderer
 asks the main process over IPC, which is local and does not sleep, so loading and error
