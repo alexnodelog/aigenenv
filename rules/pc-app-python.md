@@ -111,7 +111,10 @@ archetype), or if there is no window (a script).
   finishing, close for real when the last worker reports `finished`.
 - A single file write replaces the target atomically: temp file on the **same filesystem**,
   then rename, original left intact if the rename fails. A single DB write is one
-  transaction. Work spanning both MUST define its own recovery order.
+  transaction. Work spanning both writes the new file under a fresh name first, then
+  commits the transaction that references it, then deletes the file it replaced. At
+  startup, files in the app's file directory that no row references are deleted, so a
+  crash at any step leaves either the old state or the new one.
 - `processEvents()` loops and `time.sleep()` on the GUI thread are PROHIBITED.
 
 ### 4.2 Paths
@@ -137,6 +140,9 @@ archetype), or if there is no window (a script).
 - A failed migration: roll back, keep original and backup, do not advance `user_version`,
   refuse to open, and offer the user a way to open the backup's folder.
 - `user_version` higher than the app supports → refuse to open, tell the user to update.
+- An app holding data its users cannot recreate offers export to a file and import from
+  one, or keeps dated backups made with `sqlite3.Connection.backup`. Which, where, and
+  how many is recorded in `DECISIONS.md` before the app holds real data.
 - Shipped migrations are append-only. Fixes are new migrations. A test records a checksum
   of every shipped migration and fails if one changes; a new migration adds its checksum in
   the release that ships it.
@@ -154,8 +160,9 @@ archetype), or if there is no window (a script).
 - Released builds have no console: log to a rotating file in `user_log_dir`.
 - `main.py` installs `sys.excepthook` before the window opens. It logs the traceback and
   shows the user what failed and what to do, with a control that opens the log directory.
-- A failed slot MUST leave no partial write in the DB or on disk. The window MAY show stale
-  data as long as the user is told the action failed.
+- A failed slot MUST leave no partial write in the DB, and no file a row references that
+  the slot changed. The window MAY show stale data as long as the user is told the action
+  failed.
 
 ---
 
@@ -263,6 +270,15 @@ Schema change:
 - [ ] New migration appended, none edited; tested from the previous version, and tested
       failing mid-migration — original schema and rows unchanged, version unchanged, backup
       opens
+
+Work that writes both a file and the DB:
+
+- [ ] Tested failing after the file write and after the commit; the next start shows the
+      old state or the new one, with no unreferenced file left
+
+Backup, export, or import change:
+
+- [ ] Tested restoring into an empty data directory; the rows match the source
 
 Packaging, dependencies, resources, or `main.py` change:
 
