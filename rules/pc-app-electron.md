@@ -143,8 +143,9 @@ it, and choosing it needs an ADR and its own rule.
   instances, functions and Buffers that the renderer would display are converted first.
 - better-sqlite3 is synchronous, and a slow call on the main process freezes every
   window. Work whose duration grows with the user's data — imports, exports, scans,
-  bulk updates, file processing — runs in a `utilityProcess`, which opens its own
-  database connection and reports progress and results by message.
+  bulk updates, reading a user-chosen file or a set of files — runs in a
+  `utilityProcess`, which opens its own database connection and reports progress and
+  results by message.
 - Navigation is limited: `will-navigate` is prevented for any URL outside the app's
   origin, and `setWindowOpenHandler` returns `deny`. A link meant for the browser goes
   through `shell.openExternal`, only after the main process confirms the URL is
@@ -152,7 +153,10 @@ it, and choosing it needs an ADR and its own rule.
 - `session.setPermissionRequestHandler` denies every permission the app does not list.
 - A single file write replaces the target atomically: temp file on the **same
   filesystem**, then rename, original left intact if the rename fails. A single DB write
-  is one transaction. Work spanning both MUST define its own recovery order.
+  is one transaction. Work spanning both writes the new file under a fresh name first,
+  then commits the transaction that references it, then deletes the file it replaced.
+  At startup, files in the app's file directory that no row references are deleted, so
+  a crash at any step leaves either the old state or the new one.
 - `app.requestSingleInstanceLock()` runs before anything opens the database. A second
   instance focuses the first window and quits.
 
@@ -216,7 +220,8 @@ it, and choosing it needs an ADR and its own rule.
   never continues after either.
 - The renderer root has an error boundary, and window `error` and `unhandledrejection`
   listeners report through the bridge. The window shows what failed and what to try.
-- A failed action MUST leave no partial write in the DB or on disk. The window MAY show
+- A failed action MUST leave no partial write in the DB, and no file a row references
+  that the action changed. The window MAY show
   stale data as long as the user is told the action failed.
 - The `protocol.handle` response sets this Content-Security-Policy: `default-src 'none';
   script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:;
@@ -372,6 +377,16 @@ Schema change:
 - [ ] New migration appended, none edited; tested from the previous version, and tested
       failing mid-migration — original schema and rows unchanged, version unchanged,
       backup opens
+
+Work that writes both a file and the DB:
+
+- [ ] Tested failing after the file write and after the commit; the next start shows the
+      old state or the new one, with no unreferenced file left
+
+Backup, export, or import change:
+
+- [ ] Tested restoring a backup or importing an export into an empty data directory; the
+      rows match the source
 
 Packaging, dependencies, `main/index.ts`, the preload, `electron-builder.yml`, or the
 protocol handler change:

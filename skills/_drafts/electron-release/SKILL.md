@@ -126,10 +126,14 @@ if (selfCheck) {
 ```
 
 Then the normal start with credentials disabled, the window created with `show: false`,
-and a `selfCheck:ready` message from the renderer after first render. On ready: print the
-version, close the database, remove `root` with `rmSync(root, { recursive: true, force:
-true })`, exit 0. A timer per timeout of rule §5.3, and any error, prints the reason,
-removes `root` the same way, and exits non-zero.
+and a `selfCheck:ready` message from the renderer after first render. On ready, and on
+every timeout of rule §5.3 or error, run one `finish(code, reason)`:
+
+1. Print the version, or the reason.
+2. Destroy every window and wait for `window-all-closed`; kill any `utilityProcess`.
+3. Close the database.
+4. `rmSync(root, { recursive: true, force: true })`.
+5. `app.exit(code)` — 0 on ready, non-zero otherwise.
 
 ## 6. Whole-app tests (rule §6)
 
