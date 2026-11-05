@@ -219,21 +219,40 @@ check before first use.
 
 | Category | Default | Alternative | Prohibited |
 |---|---|---|---|
-| Shell | **Electron** | **Tauri 2** — when installer size or memory is a stated product requirement | — |
+| Shell | **Electron**, one of the three supported majors | **Tauri 2** — when installer size or memory is a stated product requirement | — |
 | Renderer UI | React + TypeScript | — | — |
-| Build tooling | electron-vite | — | — |
-| Styling | Tailwind CSS + shadcn/ui | CSS Modules | — |
-| Renderer state | Zustand | — | Redux Toolkit at personal scale |
+| Build tooling | electron-vite | — | `vite-plugin-electron` (a different project with a similar name) |
+| Styling | Tailwind CSS v4 + shadcn/ui | CSS Modules | — |
+| Renderer state | None — React state | Zustand, for state shared by distant components | Redux, Redux Toolkit |
+| Renderer data | Loaded through the preload bridge by the view that shows it | TanStack Query, for polling or optimistic updates | SWR |
 | IPC | `contextBridge`, typed, explicitly enumerated channels | — | `nodeIntegration: true`, `contextIsolation: false`, exposing `ipcRenderer` wholesale |
-| Persistence | better-sqlite3 in the main process | — | Direct DB access from the renderer |
+| Persistence | SQLite via better-sqlite3 13+ in the main process; schema on `PRAGMA user_version` | — | Direct DB access from the renderer; `node:sqlite` while it is a release candidate |
+| User credentials | Electron `safeStorage` | — | keytar |
 | Packaging | electron-builder | Electron Forge | — |
-| Tests | Vitest + Playwright | — | — |
+| Auto-update | None | electron-updater, from GitHub Releases | — |
+| Tests | Vitest — `node` for logic, browser mode in Chromium for renderer components; Playwright's Electron support for the whole app | — | jsdom, happy-dom; Spectron |
 
 **Why Electron stays the default.** Tauri's smaller binaries and lower idle memory are
 real, but it moves custom native behaviour into Rust and pushes WebView compatibility
 testing onto the developer, while Electron keeps the whole application in one language
 with a mature packaging and auto-update ecosystem. For one developer maintaining a project
 for years, a second language costs more than a hundred megabytes on disk.
+
+**Why no state or data library by default.** Same reasoning as `web-ts`: the renderer
+asks the main process over IPC, which is local and does not sleep, so loading and error
+states stay small. Each library is added when a concrete need from the Alternative column
+appears.
+
+**Why better-sqlite3 13, not `node:sqlite`.** From 13.0 better-sqlite3 is an N-API module
+and ships prebuilt binaries that load in both Node and Electron, so it is no longer
+rebuilt against Electron's ABI on every upgrade, and the same binary runs the adapter
+tests under plain Node. `node:sqlite` needs no native module at all, but in Node 24 it is
+Stability 1.2, release candidate. Reconsider when it is stable.
+
+**Why `safeStorage`.** It is Electron's own API: the key lives in the OS store (Keychain,
+DPAPI, a Linux secret service) and the app keeps only ciphertext. keytar, the former
+choice, is archived. On Linux without a secret service `safeStorage` falls back to a
+hard-coded key; the rule treats that as no credential store.
 
 ### 5.3 Web — Static
 
@@ -709,8 +728,8 @@ machine. Nothing in `uv sync` reveals that it is missing.
 |---|---|---|
 | pnpm | System — standalone | Installed first. Exact version in `packageManager` |
 | Node.js LTS | Installed by pnpm | Version in `devEngines.runtime`. No separate Node installer |
-| Native module build toolchain | **System — required** | better-sqlite3 is rebuilt against Electron's ABI. Windows: MSVC Build Tools + Python. macOS: Xcode Command Line Tools. Linux: build-essential |
-| Playwright browsers | Project (`pnpm exec playwright install`) | Downloaded, not bundled |
+| C toolchain | System — only when better-sqlite3 has no prebuilt binary for the platform | better-sqlite3 13+ ships N-API prebuilds. A source build needs Windows: MSVC Build Tools + Python. macOS: Xcode Command Line Tools. Linux: build-essential |
+| Chromium for renderer tests | Project (`pnpm exec playwright install chromium`) | Downloaded once. Whole-app tests drive the Electron binary itself and need no browser |
 | Code signing certificate | Account — paid, optional | Unsigned Windows builds trigger SmartScreen warnings; unsigned macOS builds require a Gatekeeper override. Defer until distribution matters |
 
 Cross-building installers for another OS is **not** supported practice here. Use a GitHub
@@ -823,11 +842,11 @@ you. Everything else in this document installs through uv, pnpm, or a project de
 
 | OS | Install | Needed for |
 |---|---|---|
-| Windows | Visual Studio Build Tools (C++ workload) | `pc-app-python` (Nuitka), `pc-app-electron` (native modules) |
+| Windows | Visual Studio Build Tools (C++ workload) | `pc-app-python` (Nuitka); `pc-app-electron` only without a prebuilt native binary |
 | Windows | Inno Setup | `pc-app-python` installers |
-| macOS | Xcode Command Line Tools | `pc-app-python`, `pc-app-electron` |
+| macOS | Xcode Command Line Tools | `pc-app-python`; `pc-app-electron` only without a prebuilt native binary |
 | macOS | Watchman | `mobile` |
-| Linux | build-essential (gcc), ccache | `pc-app-python`, `pc-app-electron` |
+| Linux | build-essential (gcc), ccache | `pc-app-python`; `pc-app-electron` only without a prebuilt native binary |
 | Linux | Qt runtime libraries | `pc-app-python` |
 | Any | JDK 17 | `mobile` — Gradle builds and Maestro |
 | Any | Android Studio + Android SDK | `mobile` — local builds and emulator |
