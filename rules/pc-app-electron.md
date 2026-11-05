@@ -135,16 +135,16 @@ it, and choosing it needs an ADR and its own rule.
   loads no frames of its own.
 - A handler returns `{ ok: true, value }` or `{ ok: false, error: { code, message } }`.
   An expected failure is returned as a value and shown next to its field. One wrapper
-  around every handler catches unexpected errors, logs them in full, and returns only
-  `{ code: "internal" }` with a fixed message. A handler never throws to the renderer:
-  Electron would pass the error's message across, paths and SQL included.
+  around every handler catches unexpected errors, logs them in full, and returns
+  `{ ok: false, error: { code: "internal", message } }` with a fixed message. A handler
+  never throws to the renderer: Electron would pass the error's message across, paths
+  and SQL included.
 - Only plain data crosses IPC: values whose types are declared in `shared/`. Class
   instances, functions and Buffers that the renderer would display are converted first.
 - better-sqlite3 is synchronous, and a slow call on the main process freezes every
   window. Work whose duration grows with the user's data — imports, exports, scans,
-  bulk updates — or that can exceed 100 ms on the user's data runs in a
-  `utilityProcess`, which opens its own database connection and reports progress and
-  results by message.
+  bulk updates, file processing — runs in a `utilityProcess`, which opens its own
+  database connection and reports progress and results by message.
 - Navigation is limited: `will-navigate` is prevented for any URL outside the app's
   origin, and `setWindowOpenHandler` returns `deny`. A link meant for the browser goes
   through `shell.openExternal`, only after the main process confirms the URL is
@@ -184,6 +184,9 @@ it, and choosing it needs an ADR and its own rule.
 - A failed migration: roll back, keep original and backup, do not advance
   `user_version`, refuse to open, and offer the user a way to open the backup's folder.
 - `user_version` higher than the app supports → refuse to open, tell the user to update.
+- An app holding data its users cannot recreate offers export to a file and import from
+  one, or keeps dated backups made with `backup()`. Which, where, and how many is
+  recorded in `DECISIONS.md` before the app holds real data.
 - Shipped migrations are append-only. Fixes are new migrations. A test records a checksum
   of every shipped migration and fails if one changes; a new migration adds its checksum
   in the release that ships it.

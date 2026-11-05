@@ -45,11 +45,11 @@ After `ready`, `protocol.handle("app", handler)`. The handler:
 3. Refuses (404) a decoded path containing `\`, a NUL byte, or a `..` segment — a
    double-encoded `%252e%252e` decodes to `%2e%2e` and is then served as a literal,
    nonexistent name.
-4. `path.resolve(rendererDir, "." + decoded)`; refuses (404) unless
-   `path.relative(rendererDir, resolved)` is non-empty, does not start with `..`, and is
-   not absolute. The renderer build inside `app.asar` holds no symlinks.
-5. Serves `index.html` for `/`.
-6. Returns `net.fetch(pathToFileURL(file).toString())` with the CSP and
+4. Maps `/` to `/index.html`, then `path.resolve(rendererDir, "." + decoded)`. Refuses
+   (404) when `rel = path.relative(rendererDir, resolved)` is empty, absolute, equal to
+   `..`, or starts with `..` followed by `path.sep`. The renderer build inside
+   `app.asar` holds no symlinks.
+5. Returns `net.fetch(pathToFileURL(file).toString())` with the CSP and
    `X-Content-Type-Options` headers of rule §4.4 added.
 
 Window load:
@@ -136,7 +136,7 @@ removes `root` the same way, and exits non-zero.
 ```ts
 const app = await _electron.launch({
   args: ["out/main/index.js"],
-  env: { ...process.env, E2E_USER_DATA_DIR: tmpDir },
+  env: { PATH: process.env.PATH ?? "", DISPLAY: process.env.DISPLAY ?? "", E2E_USER_DATA_DIR: tmpDir },
 });
 ```
 
