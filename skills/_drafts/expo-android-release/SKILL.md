@@ -43,7 +43,7 @@ import pkg from "./package.json";
 
 const USED_PERMISSIONS: string[] = [];          // the single list rule §4.1 refers to
 const BLOCKED_PERMISSIONS: string[] = [];       // added by plugins, not used
-const ALLOW_BACKUP: boolean = ;                 // deliberately unset: the build fails until DECISIONS.md decides (rule §4.2)
+const ALLOW_BACKUP: boolean = ;                 // deliberately unset: ask the human, record the choice in DECISIONS.md, then set it (rule §4.2)
 
 function versionCode(version: string): number {
   const [major, minor, patch] = version.split(".").map(Number);
@@ -137,7 +137,7 @@ With Build-Tools on `PATH` (`$ANDROID_HOME/build-tools/<version>`):
 
 ## 6. Maestro smoke and upgrade flows (rule §5.3, §6)
 
-`maestro/smoke.yaml`:
+`maestro/flows/smoke.yaml`:
 
 ```yaml
 appId: <reverse.domain.app>
@@ -158,16 +158,16 @@ appId: <reverse.domain.app>
     timeout: 30000
 ```
 
-Run: `maestro test -e APP_VERSION=<version> maestro/smoke.yaml`, with the emulator's network
+Run: `maestro test -e APP_VERSION=<version> maestro/flows/smoke.yaml`, with the emulator's network
 off (`adb shell svc wifi disable`, `adb shell svc data disable`).
 
 Upgrade flow (rule §6), from the second release on:
 
 1. `gh release download v<previous> -p '*.apk'` and `adb install` it on a fresh emulator.
-2. `maestro test maestro/upgrade-before.yaml` — `clearState`, `launchApp`, create one
+2. `maestro test maestro/upgrade/before.yaml` — `clearState`, `launchApp`, create one
    record through the UI with a fixed, recognisable value.
 3. `adb install -r` the new APK (replace, data kept).
-4. `maestro test maestro/upgrade-after.yaml` — `launchApp` without `clearState`, wait for
+4. `maestro test maestro/upgrade/after.yaml` — `launchApp` without `clearState`, wait for
    `app-ready`, assert the record from step 2 is shown.
 
 ## 7. CI (rule §5.5)
@@ -184,8 +184,8 @@ Upgrade flow (rule §6), from the second release on:
      `android/app/build/outputs/bundle/release/app-release.aab`. Copy both to `dist/`
      as `<slug>-<version>.apk` and `.aab`; fail if either is missing or empty.
   7. APK checks (§5).
-  8. Start an emulator (KVM), install the APK with `adb install`, run every flow in
-     `maestro/`, then the upgrade flow (this skill §6) on a fresh emulator.
+  8. Start an emulator (KVM), install the APK with `adb install`, run `maestro test maestro/flows/`,
+     then the upgrade flow (this skill §6) on a fresh emulator.
   9. `sha256sum` the APK into `<slug>-<version>.apk.sha256`; `gh release create` with both;
      upload the AAB as a workflow artifact.
 
@@ -211,7 +211,8 @@ Upgrade flow (rule §6), from the second release on:
 - [verify] `node:sqlite` loaded inside Jest (`testEnvironment: "node"`) on the Node LTS in
   `devEngines.runtime`, and SQL behaviour differences from the SQLite bundled by
   `expo-sqlite`.
-- [verify] `backupDatabaseAsync` signature in `expo-sqlite` for SDK 58.
+- [verify] Argument shape of `backupDatabaseAsync` in `expo-sqlite` for SDK 58 (the native
+  function exists; the JS options object is unconfirmed).
 - [verify] Android emulator with KVM on standard GitHub-hosted ubuntu runners, and its
   run time for the tag workflow.
 - [verify] Maestro `extendedWaitUntil` with `id`, and passing `-e` variables, on the
