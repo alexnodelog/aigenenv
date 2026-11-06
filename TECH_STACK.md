@@ -116,8 +116,7 @@ Applies to every archetype.
 
 **Why uv instead of Poetry.** uv resolves and installs an order of magnitude faster, ships
 as a single binary, and replaces pip, virtualenv, pipx, and pyenv at once — so Python
-version pinning comes free and no PC needs a separate version manager installed. This
-overrides the Poetry preference in the philosophy document; recorded as ADR-0001.
+version pinning comes free and no PC needs a separate version manager installed.
 
 **Why pnpm installs Node, not the other way round.** Since pnpm 11, pnpm ships as a
 standalone executable and installs the Node.js version the project declares in
@@ -131,14 +130,16 @@ first, one file recording both versions.
 
 ### 4.1 Native first, Docker optional
 
-Reproducibility is guaranteed by lockfiles, not by containers:
+Dependencies and language runtimes are reproduced by lockfiles, not by containers:
 
 ```
 uv sync      # Python: exact deps + exact interpreter version
 pnpm install # Node: exact deps + exact runtime version
 ```
 
-A project MUST start from a clean clone with those commands alone. A project MUST NOT
+System tools a lockfile cannot pin — compilers, SDKs, OS build tools — are listed per
+archetype in §9 and pinned in CI. A project MUST start from a clean clone with those
+commands alone, once §9's tools are installed. A project MUST NOT
 require Docker to run its tests or its development server.
 
 Docker Compose is RECOMMENDED for web archetypes whose deployment artifact is itself a
@@ -151,8 +152,7 @@ emulator toolchains make containers a net loss.
 | Podman Desktop, Rancher Desktop | Alternative — where Docker Desktop licensing or install policy blocks it |
 
 Dev Container configuration is OPTIONAL. It MUST NOT become the only supported way to
-develop a project. This overrides the "clone → docker compose up" workflow in the
-philosophy document; recorded as ADR-0002.
+develop a project.
 
 ### 4.2 Editor and agent orchestration
 
@@ -487,12 +487,16 @@ on macOS and Linux. On Windows, `pnpm expo run:android` is the local build.
 
 **Distribution path**, in order:
 
-1. **Internal** — the signed release APK that CI attaches to a GitHub Release. No store
-   account.
+1. **Internal** — the signed release APK that CI attaches to a GitHub Release, for the
+   developer and people close to them. No store account.
 2. **Google Play** — one-time developer registration fee, AAB built by CI. A personal
    account created after 13 November 2023 must run a closed test with at least 12 testers
    opted in for 14 continuous days before it can apply for production access. An
-   organization account is exempt but needs a D-U-N-S number.
+   organization account is exempt but needs a D-U-N-S number. Play App Signing uses the
+   key Google generates — the default most new apps take — so a Play build cannot update
+   a GitHub APK. Testers move to Play's internal testing track; anyone on a GitHub APK
+   exports their data and reinstalls from Play once. Handing Play the project's own key
+   instead is for apps that keep shipping outside Play as well.
 3. **iOS** — deferred. Requires a yearly Apple Developer membership and either a Mac or EAS
    cloud build, so choosing it reopens the EAS question above.
 
