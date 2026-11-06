@@ -155,8 +155,10 @@ it, and choosing it needs an ADR and its own rule.
   filesystem**, then rename, original left intact if the rename fails. A single DB write
   is one transaction. Work spanning both writes the new file under a fresh name first,
   then commits the transaction that references it, then deletes the file it replaced.
-  At startup, files in the app's file directory that no row references are deleted, so
-  a crash at any step leaves either the old state or the new one.
+  Files the DB references live in one directory the app reserves for them, and nothing
+  else is written there. At startup, files in that directory that no row references are
+  deleted, so a crash at any step leaves either the old state or the new one; the sweep
+  never touches anything outside it.
 - `app.requestSingleInstanceLock()` runs before anything opens the database. A second
   instance focuses the first window and quits.
 
