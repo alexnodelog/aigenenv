@@ -9,9 +9,8 @@ document.
 Precedence is unchanged: `GLOBAL_RULES.md → rules/<project>.md → CLAUDE.md → current task`.
 An agent definition adds role-specific behaviour; it never relaxes a rule.
 
-**Precondition.** This design conflicts with the current `GLOBAL_RULES.md` until the changes
-in §9 are made there. No file derived from this document is deployed before those changes
-are made, every skill an agent definition names exists, the way `CLAUDE.md` brings the
+**Precondition.** The `GLOBAL_RULES.md` changes in §9 are made. No file derived from this
+document is deployed before every skill an agent definition names exists, the way `CLAUDE.md` brings the
 rules into a subagent has been verified on the installed CLI, whether a subagent with no
 `skills:` field can invoke a skill has been verified on the installed CLI, and the human has
 confirmed
@@ -118,8 +117,9 @@ orchestrator lets the verdict stand only when both hold, with `state.md` and
 
 1. Every commit on the target branch between `BASE` and the merge commit's first parent
    changes only those two files — no other code arrived while the task was open.
-2. `git diff <approved commit> <merge commit>` is empty — the merge brought in exactly the
-   approved tree, with no hand-made conflict edits.
+2. `git diff <approved commit> <merge commit> -- . ':(exclude)state.md' ':(exclude)known-issues.md'`
+   is empty — the merge brought in exactly the approved tree, with no hand-made conflict
+   edits.
 
 If either fails, a `check`-mode reviewer runs on the merge commit before any dependent task
 starts. In a parallel run every merge after the first fails condition 1, so it is always
@@ -436,7 +436,7 @@ section, never by editing someone else's text.
 
 ## 9. Changes this design requires elsewhere
 
-`GLOBAL_RULES.md` (step 3):
+`GLOBAL_RULES.md` (step 3, done):
 
 - Orchestration: "does not edit files" becomes "edits only `state.md` and `known-issues.md`".
   Tracking state is impossible otherwise.
