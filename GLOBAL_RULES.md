@@ -68,7 +68,7 @@ Size never downgrades these. Any task that touches:
 - Money — billing, payments, paid API usage
 - Deployment, release, or CI configuration
 - Sensitive personal data — national identification numbers, health, biometric, or
-  financial account data — collected, stored, or sent
+  financial account data — newly collected, stored, or sent
 - A dependency update that remediates a known vulnerability — the patch is small, but
   what it exposes until it ships is not. An ordinary version bump stays Small
 
@@ -495,7 +495,9 @@ committed as logging.
 **Repeated and paid operations.** An external call that costs money or has an effect
 outside the project — a payment, an email, a record written to a third party — MUST be
 safe to retry without duplicating that effect, and MUST have a stated limit on attempts.
-Partial success followed by a blind retry is how one charge becomes three.
+Partial success followed by a blind retry is how one charge becomes three. A call whose
+outcome is unknown — a timeout after the request was sent — is not a failure: its result is
+looked up by its request ID before any retry.
 
 **Security.**
 
@@ -513,15 +515,19 @@ Partial success followed by a blind retry is how one charge becomes three.
 - **Sign-in passwords** — the ones a person uses to sign in to the application itself. The
   application stores only a slow hash of each, never the password, as the archetype rule
   names.
-- **Sensitive personal data.** Before building anything that collects, stores, or sends
-  it, the agent stops and asks: whether the project may hold it at all is the human's
-  decision, not a design detail. If the human proceeds, `DECISIONS.md` records why it is
-  needed, what is kept and where, and how it is protected — including whether it is
-  encrypted at rest and what happens if that key is lost.
+- **Sensitive personal data.** Before building anything that starts collecting, storing,
+  or sending it, the agent stops and asks: whether the project may hold it at all is the
+  human's decision, not a design detail. Deleting or anonymizing it needs no such stop. If
+  the human proceeds, `DECISIONS.md` records why it is needed, what is kept and where, and
+  how it is protected — including whether it is encrypted at rest and what happens if that
+  key is lost.
 - `.env` MUST be in `.gitignore` before the first commit.
 - All external input — user input, API responses, file contents, environment variables —
   MUST be validated at the boundary before reaching business logic.
 - SQL MUST be parameterized. String-built queries are PROHIBITED.
+- A file path built from external input is resolved and checked to stay inside its allowed
+  directory before use. A command takes its arguments as a list; a shell command string
+  built from external input is PROHIBITED.
 - Least privilege: every credential, token, and service account gets the narrowest scope
   that works. An agent MUST NOT be given write access it does not need for the current
   task.
