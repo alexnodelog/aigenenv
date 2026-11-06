@@ -99,7 +99,8 @@ archetype), or if there is no window (a script).
 
 ### 4.1 GUI thread
 
-- Work that can exceed ~100 ms runs on a worker. Widgets are touched only from the GUI
+- Work that waits on I/O — a file, the database, the network, a subprocess — or loops over
+  the user's data runs on a worker. Widgets are touched only from the GUI
   thread; workers report by signal.
 - Pattern: `QThread` + worker `QObject`, `moveToThread`, start from `thread.started`,
   `finished` → `thread.quit` → `deleteLater`. Hold a reference to both until `finished`.
@@ -112,9 +113,11 @@ archetype), or if there is no window (a script).
 - A single file write replaces the target atomically: temp file on the **same filesystem**,
   then rename, original left intact if the rename fails. A single DB write is one
   transaction. Work spanning both writes the new file under a fresh name first, then
-  commits the transaction that references it, then deletes the file it replaced. At
-  startup, files in the app's file directory that no row references are deleted, so a
-  crash at any step leaves either the old state or the new one.
+  commits the transaction that references it, then deletes the file it replaced. Files
+  the DB references live in one directory the app reserves for them, and nothing else is
+  written there. At startup, files in that directory that no row references are deleted,
+  so a crash at any step leaves either the old state or the new one; the sweep never
+  touches anything outside it.
 - `processEvents()` loops and `time.sleep()` on the GUI thread are PROHIBITED.
 
 ### 4.2 Paths
