@@ -67,6 +67,8 @@ Size never downgrades these. Any task that touches:
 - Secrets, credentials, or key rotation
 - Money — billing, payments, paid API usage
 - Deployment, release, or CI configuration
+- Sensitive personal data — national identification numbers, health, biometric, or
+  financial account data — collected, stored, or sent
 - A dependency update that remediates a known vulnerability — the patch is small, but
   what it exposes until it ships is not. An ordinary version bump stays Small
 
@@ -511,6 +513,11 @@ Partial success followed by a blind retry is how one charge becomes three.
 - **Sign-in passwords** — the ones a person uses to sign in to the application itself. The
   application stores only a slow hash of each, never the password, as the archetype rule
   names.
+- **Sensitive personal data.** Before building anything that collects, stores, or sends
+  it, the agent stops and asks: whether the project may hold it at all is the human's
+  decision, not a design detail. If the human proceeds, `DECISIONS.md` records why it is
+  needed, what is kept and where, and how it is protected — including whether it is
+  encrypted at rest and what happens if that key is lost.
 - `.env` MUST be in `.gitignore` before the first commit.
 - All external input — user input, API responses, file contents, environment variables —
   MUST be validated at the boundary before reaching business logic.
