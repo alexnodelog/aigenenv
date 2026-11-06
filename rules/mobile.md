@@ -24,7 +24,7 @@ iOS is deferred. Nothing here builds, tests or ships for iOS; starting iOS work 
 | Packaging | pnpm, standalone install, exact version in `package.json` `packageManager`; `pnpm-lock.yaml`; `nodeLinker: isolated` (pnpm's default) | `nodeLinker: hoisted`, with the ADR naming the library that failed under `isolated` | npm, yarn, bun; Corepack; `npx` in scripts or docs; `enableGlobalVirtualStore` — Metro cannot resolve packages stored outside the project |
 | Language | TypeScript, `strict: true` | — | Plain JavaScript in new code |
 | Framework | Expo SDK 58 (React Native 0.88), Continuous Native Generation: `android/` and `ios/` are generated and gitignored | — | Bare React Native; committed native directories |
-| Native configuration | `app.config.ts` and config plugins, `expo-build-properties` for Gradle settings | A local config plugin in `plugins/` | Editing anything under `android/` |
+| Native configuration | `app.config.ts` and config plugins, `expo-build-properties` for Gradle settings; a local config plugin in `plugins/` for what those cannot express, such as release signing | — | Editing anything under `android/` |
 | CLI | Expo CLI from the `expo` package, run as `pnpm expo` | EAS CLI, only with an EAS Alternative below, run as `pnpm dlx eas-cli@<exact version>` | `eas-cli` as a project dependency; a global install of either |
 | Navigation | Expo Router, routes in `src/app/` | React Navigation | — |
 | State | None — `useState`, `useReducer` | Zustand, for state shared by distant screens | Redux, Redux Toolkit |
@@ -56,7 +56,8 @@ iOS is deferred. Nothing here builds, tests or ships for iOS; starting iOS work 
 | Google Play developer account | Account. Only at store release |
 
 The first `pnpm expo run:android` downloads Gradle's dependencies. After that the
-development loop works offline; the Gradle cache MUST NOT be cleared to fix a build.
+development loop works offline because of the Gradle cache. Clearing it is a last step
+after the cause of a build error is identified, never the first try.
 
 ---
 
@@ -72,11 +73,10 @@ development loop works offline; the Gradle cache MUST NOT be cleared to fix a bu
 ├── biome.json
 ├── jest.config.ts        projects: core in node, ui in jest-expo
 ├── .env.example
-├── plugins/              local config plugins, only when §1's Alternative is taken
+├── plugins/              local config plugins: release signing, and what app.config.ts cannot express
 ├── src/
 │   ├── app/              Expo Router routes only: _layout.tsx, one file per screen
-│   ├── screens/          one component per screen; routes render these
-│   ├── components/       shared components
+│   ├── components/       components and hooks shared by routes
 │   ├── config.ts         the only reader of process.env
 │   ├── composition.ts    composition root: opens the database, builds adapters and services
 │   ├── domain/           pure TypeScript
@@ -88,21 +88,22 @@ development loop works offline; the Gradle cache MUST NOT be cleared to fix a bu
 └── dist/                 gitignored; release artifacts
 ```
 
-- Every file in `src/app/` is a route, reachable by deep link. Components, hooks and helpers
-  MUST NOT live there. A route file renders one `screens/` component and passes it the
-  validated route params.
-- `src/app/_layout.tsx` calls `composition.ts` once at start and provides the services
-  through React context. Nothing else constructs an adapter or opens the database.
+- Every file in `src/app/` is a route, reachable by deep link. A route file MAY hold its
+  whole screen; components, hooks and helpers it shares with other routes live in
+  `components/`, never in `src/app/`.
+- `src/app/_layout.tsx` is the only file that imports `composition.ts`. It calls it once at
+  start and provides the services through React context. Nothing else constructs an
+  adapter or opens the database.
 - An app with no business rules MAY omit `domain/` and `services/`, and MUST NOT add them
   to match this layout. A new top-level dir needs an ADR only if it changes a row of the
   import table below.
 
 | Directory | MAY import | MUST NOT import |
 |---|---|---|
-| `domain/` | `domain/` | React, `react-native`, `expo*`, `adapters/`, `app/`, `screens/`, `components/` |
-| `services/` | `domain/`, own `ports.ts` | React, `react-native`, `expo*`, `adapters/`, `app/`, `screens/`, `components/` |
-| `adapters/` | `services/ports.ts`, `domain/`, `expo-sqlite`, `expo-secure-store`, `expo-file-system` | React, `react-native`, `app/`, `screens/`, `components/` |
-| `app/`, `screens/`, `components/` | `services/` types, `domain/` types, React, `react-native`, `expo-router`, Expo UI and device modules | `adapters/`, `composition.ts`, `expo-sqlite`, `expo-secure-store`, `expo-file-system` |
+| `domain/` | `domain/` | React, `react-native`, `expo*`, `adapters/`, `app/`, `components/` |
+| `services/` | `domain/`, own `ports.ts` | React, `react-native`, `expo*`, `adapters/`, `app/`, `components/` |
+| `adapters/` | `services/ports.ts`, `domain/`, `expo-sqlite`, `expo-secure-store`, `expo-file-system` | React, `react-native`, `app/`, `components/` |
+| `app/`, `components/` | `services/` types, `domain/` types, React, `react-native`, `expo-router`, Expo UI and device modules; `composition.ts` from `app/_layout.tsx` only | `adapters/`, `expo-sqlite`, `expo-secure-store`, `expo-file-system` |
 
 - A handler in a screen reads input, calls one use case, and renders the result. A decision
   about *what the application does*, taken in a screen or component, is a defect.
@@ -115,15 +116,18 @@ development loop works offline; the Gradle cache MUST NOT be cleared to fix a bu
 
 ### 4.1 App lifecycle and the JS thread
 
-- Android may kill the app in the background without warning or callback. Every change the
-  user makes is written when it is made; nothing waits for the app to close or to go to
-  the background. When the app returns to the foreground, the visible screen re-reads
+- Android may kill the app in the background without warning or callback. A change the
+  user confirms — a save, a toggle, a submitted form — is written at once; nothing waits
+  for the app to close or to go to the background. Text being typed MAY stay in memory
+  until it is confirmed. When the app returns to the foreground, the visible screen re-reads
   what it shows.
-- All JavaScript runs on one thread, which also handles touches. Work that can exceed
-  ~100 ms — a large query, parsing a file, a loop over many records — is paged or moved
-  out of a render, and the screen shows that it is working.
+- All JavaScript runs on one thread, which also handles touches. A list that grows with
+  the user's data is read and rendered in pages, never loaded whole. Parsing a file or any
+  other long job runs outside a render, and the screen shows that it is working.
+- A control that starts a write is disabled from the press until the use case finishes,
+  so a second press cannot repeat it.
 - Every route param is input from outside the app: anyone can open a deep link. The route
-  file validates it before the screen sees it, and an invalid one shows the not-found
+  file validates it before use, and an invalid one shows the not-found
   screen.
 - A permission is requested when the user starts the feature that needs it, never at
   startup. Denial leaves the rest of the app working and tells the user how to grant it
@@ -170,9 +174,11 @@ development loop works offline; the Gradle cache MUST NOT be cleared to fix a bu
 - A failed migration: roll back, keep original and backup, do not advance `user_version`,
   refuse to open, and offer to send the backup file out through the share sheet.
 - `user_version` higher than the app supports → refuse to open, tell the user to update.
-- Work spanning a file and the database writes the new file under a fresh name first, then
-  commits the transaction that references it, then deletes the file it replaced. At
-  startup, files in the app's file directory that no row references are deleted.
+- Files the database references live in one directory the app reserves for them, and
+  nothing else is written there. Work spanning such a file and the database writes the
+  new file under a fresh name first, then commits the transaction that references it,
+  then deletes the file it replaced. At startup, files in that directory that no row
+  references are deleted; the sweep never touches anything outside it.
 - An app holding data its users cannot recreate offers export to a file through the share
   sheet and import through the document picker. A lost or replaced phone loses everything
   else. The format and what it covers are recorded in `DECISIONS.md` before the app holds
@@ -284,9 +290,10 @@ Checks on the built APK, before the smoke flow:
 
 - Push / PR: one Linux job — `pnpm install --frozen-lockfile`, Biome, `tsc --noEmit`, Jest
   including the boundary check and the adapter tests, `pnpm expo install --check`.
-- Version tag: all of the above → `pnpm build` → the APK checks of §5.3 → the smoke flow
-  and every Maestro flow on an emulator → GitHub Release with the APK and its checksum,
-  and the AAB as a workflow artifact. The release is published only if every step passes.
+- Version tag: all of the above → `pnpm build` → the APK checks of §5.3 → the smoke flow,
+  every Maestro flow and the upgrade flow (§6) on an emulator → GitHub Release with the
+  APK and its checksum, and the AAB as a workflow artifact. The release is published only
+  if every step passes.
 - The keystore and its passwords are set only on the signing step; no other job or step
   can read them.
 
@@ -298,7 +305,7 @@ Checks on the built APK, before the smoke flow:
 |---|---|---|
 | `domain/`, `services/` | Jest, `node` environment, fake ports | MUST NOT import it |
 | `adapters/sqlite/` | Jest, `node` environment, `SqlConnection` over in-memory `node:sqlite`, migrated from `migrations.ts` | no |
-| `screens/`, `components/` | Jest via `jest-expo`, `@testing-library/react-native` | yes, native modules mocked |
+| `app/`, `components/` | Jest via `jest-expo`, `@testing-library/react-native` | yes, native modules mocked |
 | Built app | Maestro on an emulator (§5.3) | yes, on a device |
 
 Most tests are in the first two rows. A screen test proves an input reaches the right use
@@ -313,8 +320,14 @@ case and the result is shown — not the rule itself.
 - Assert what the user sees: text, `disabled`, presence of an element.
 - Time is controlled with fake timers. Waiting real time is PROHIBITED in Jest and in
   Maestro: wait for an element with a timeout.
-- Every Maestro flow starts with the app's state cleared, so no flow depends on another.
-- A feature behind a permission has one flow where it is granted and one where it is denied.
+- Every Maestro flow starts with the app's state cleared, so no flow depends on another —
+  except the upgrade flow.
+- The upgrade flow installs the previous release's APK, creates data through the app,
+  installs the new APK over it without clearing, and checks that the data is still
+  shown. It runs from the second release on, and it is the on-device check that the
+  migrations tested in Jest also apply on the SQLite `expo-sqlite` ships.
+- A feature behind a permission has a flow where the permission is denied and the rest of
+  the app still works.
 
 ---
 
@@ -343,14 +356,14 @@ around a prohibition when something does not work.
 Every task here:
 
 - [ ] Boundary check (§3) passes
-- [ ] No `*Sync` SQLite call; no new work over ~100 ms inside a render
+- [ ] No `*Sync` SQLite call; no list that grows with the user's data loaded whole
 - [ ] Screen tests find controls by role and label; no real-time waits
 
 Schema change:
 
 - [ ] New migration appended, none edited; tested from the previous version, and tested
       failing mid-migration — original schema and rows unchanged, version unchanged, backup
-      opens
+      opens; the upgrade flow (§6) passes before the release ships
 
 Work that writes both a file and the database:
 

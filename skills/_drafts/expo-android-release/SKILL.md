@@ -1,6 +1,6 @@
 ---
 name: expo-android-release
-description: Set up the Android toolchain, configure app.config.ts (version, permissions, backup), create the upload keystore, wire the SQLite test connection, write the Maestro smoke flow, check the built APK, set up CI, and cut a release of a mobile (Expo) app. Use when creating or changing app.config.ts, pnpm-workspace.yaml, jest.config.ts, maestro/, CI workflows, the keystore, or when cutting a release.
+description: Set up the Android toolchain, configure app.config.ts (version, permissions, backup), create the upload keystore, wire the SQLite test connection, write the Maestro smoke and upgrade flows, check the built APK, set up CI, and cut a release of a mobile (Expo) app. Use when creating or changing app.config.ts, pnpm-workspace.yaml, jest.config.ts, maestro/, CI workflows, the keystore, or when cutting a release.
 ---
 
 # expo-android-release (draft)
@@ -20,8 +20,9 @@ empty.
   Confirm with `java -version` and `adb --version`.
 - Maestro on Windows: download `maestro.zip` from the Maestro GitHub releases, extract to
   a stable path, add its `bin` to `PATH`, confirm with `maestro --help`.
-- New project: `pnpm create expo-app <name>` with the template of the SDK in rule §1, then
+- New project: `pnpm create expo-app <name> --template default@sdk-58`, then
   `pnpm expo install expo-dev-client`, then add `android/` and `ios/` to `.gitignore`.
+  The SDK number follows rule §1.
 - `pnpm-workspace.yaml`:
 
   ```yaml
@@ -42,6 +43,7 @@ import pkg from "./package.json";
 
 const USED_PERMISSIONS: string[] = [];          // the single list rule §4.1 refers to
 const BLOCKED_PERMISSIONS: string[] = [];       // added by plugins, not used
+const ALLOW_BACKUP: boolean = ;                 // deliberately unset: the build fails until DECISIONS.md decides (rule §4.2)
 
 function versionCode(version: string): number {
   const [major, minor, patch] = version.split(".").map(Number);
@@ -59,7 +61,7 @@ const config: ExpoConfig = {
     versionCode: versionCode(pkg.version),
     permissions: USED_PERMISSIONS,
     blockedPermissions: BLOCKED_PERMISSIONS,
-    allowBackup: false,                          // or true — the choice is an ADR
+    allowBackup: ALLOW_BACKUP,
   },
   plugins: ["expo-router", "expo-sqlite", "expo-secure-store"],
 };
@@ -75,36 +77,49 @@ permissions (§5); every one not in `USED_PERMISSIONS` goes to `BLOCKED_PERMISSI
 Once, on the developer's machine, outside the repository:
 
 ```
-keytool -genkeypair -v -storetype PKCS12 -keystore upload.keystore -alias upload ^
-  -keyalg RSA -keysize 2048 -validity 10000
+keytool -genkeypair -v -storetype PKCS12 -keystore upload.keystore -alias upload -keyalg RSA -keysize 2048 -validity 10000
 ```
+
+One line, so it runs unchanged in CMD, PowerShell and Bash.
 
 - Back up the file and both passwords to a place off this machine before the first
   release. Record where in `DECISIONS.md` (the location, never the passwords).
 - CI secrets: `ANDROID_KEYSTORE_BASE64` (the file, base64), `ANDROID_KEYSTORE_PASSWORD`,
   `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`.
-- Signing is applied after `prebuild` by a local config plugin that reads those variables
-  into the release `signingConfig`; when they are absent it MUST fail the release build,
-  not fall back to the debug key.
+- Signing is applied after `prebuild` by `plugins/with-release-signing.ts` (rule §1, Default),
+  which reads those variables into the release `signingConfig`; when they are absent it
+  MUST fail the release build, not fall back to the debug key.
 
 ## 4. SQLite test connection (rule §4.3, §6)
 
 `src/adapters/sqlite/connection.ts` declares the subset in use:
 
 ```ts
-export interface SqlConnection {
+export type SqlParam = string | number | null | Uint8Array;
+
+/** What a repository runs statements on: the connection, or a transaction. */
+export interface SqlExecutor {
   execAsync(sql: string): Promise<void>;
-  runAsync(sql: string, ...params: SqlParam[]): Promise<{ changes: number; lastInsertRowId: number }>;
-  getAllAsync<T>(sql: string, ...params: SqlParam[]): Promise<T[]>;
-  getFirstAsync<T>(sql: string, ...params: SqlParam[]): Promise<T | null>;
-  withExclusiveTransactionAsync(task: (txn: SqlConnection) => Promise<void>): Promise<void>;
+  runAsync(sql: string, params: SqlParam[]): Promise<{ changes: number; lastInsertRowId: number }>;
+  getAllAsync<T>(sql: string, params: SqlParam[]): Promise<T[]>;
+  getFirstAsync<T>(sql: string, params: SqlParam[]): Promise<T | null>;
+}
+
+export interface SqlConnection extends SqlExecutor {
+  withExclusiveTransactionAsync(task: (txn: SqlExecutor) => Promise<void>): Promise<void>;
 }
 ```
+
+A transaction receives only `SqlExecutor`: nesting transactions is not part of the
+contract. Values are always passed in `params`, never built into `sql`.
 
 `tests/adapters/node-sqlite-connection.ts` implements it over
 `new DatabaseSync(":memory:")` from `node:sqlite`, wrapping each call in a resolved promise
 and the transaction in `BEGIN IMMEDIATE` / `COMMIT` / `ROLLBACK`. Every adapter test opens
 a fresh connection and runs `migrations.ts` on it first.
+
+This double is not `expo-sqlite`. Type conversion, error codes and the SQLite version can
+differ; the upgrade flow (rule §6) is what proves migrations on the real engine.
 
 `jest.config.ts`: two projects — `core` (`tests/core`, `tests/adapters`,
 `testEnvironment: "node"`) and `ui` (`tests/ui`, `preset: "jest-expo"`).
@@ -120,7 +135,7 @@ With Build-Tools on `PATH` (`$ANDROID_HOME/build-tools/<version>`):
 - Contents: unzip to a temp dir; fail on `.env*` or `*.map`; run the project's secret check
   over the directory.
 
-## 6. Maestro smoke flow (rule §5.3)
+## 6. Maestro smoke and upgrade flows (rule §5.3, §6)
 
 `maestro/smoke.yaml`:
 
@@ -146,6 +161,15 @@ appId: <reverse.domain.app>
 Run: `maestro test -e APP_VERSION=<version> maestro/smoke.yaml`, with the emulator's network
 off (`adb shell svc wifi disable`, `adb shell svc data disable`).
 
+Upgrade flow (rule §6), from the second release on:
+
+1. `gh release download v<previous> -p '*.apk'` and `adb install` it on a fresh emulator.
+2. `maestro test maestro/upgrade-before.yaml` — `clearState`, `launchApp`, create one
+   record through the UI with a fixed, recognisable value.
+3. `adb install -r` the new APK (replace, data kept).
+4. `maestro test maestro/upgrade-after.yaml` — `launchApp` without `clearState`, wait for
+   `app-ready`, assert the record from step 2 is shown.
+
 ## 7. CI (rule §5.5)
 
 - PR workflow: ubuntu job, steps as rule §5.5.
@@ -156,10 +180,13 @@ off (`adb shell svc wifi disable`, `adb shell svc data disable`).
   4. Fail if the tag is not `v` + `version` in `package.json`.
   5. Signing step only: decode the keystore secret to a temp file; `pnpm build`; delete the
      file.
-  6. APK checks (§5).
-  7. Start an emulator (KVM), install the APK with `adb install`, run every flow in
-     `maestro/`.
-  8. `sha256sum app-release.apk > app-release.apk.sha256`; `gh release create` with both;
+  6. Outputs: `android/app/build/outputs/apk/release/app-release.apk` and
+     `android/app/build/outputs/bundle/release/app-release.aab`. Copy both to `dist/`
+     as `<slug>-<version>.apk` and `.aab`; fail if either is missing or empty.
+  7. APK checks (§5).
+  8. Start an emulator (KVM), install the APK with `adb install`, run every flow in
+     `maestro/`, then the upgrade flow (this skill §6) on a fresh emulator.
+  9. `sha256sum` the APK into `<slug>-<version>.apk.sha256`; `gh release create` with both;
      upload the AAB as a workflow artifact.
 
 ## 8. Release
@@ -173,8 +200,9 @@ off (`adb shell svc wifi disable`, `adb shell svc data disable`).
 
 ## Unverified
 
-- [verify] Expo SDK 58 default template name for `pnpm create expo-app`, and whether it
-  works under pnpm's `isolated` linker without changes.
+- [verify] `pnpm create expo-app` with `--template default@sdk-58` (the form Expo's SDK 58
+  notes give for `npx create-expo-app`), and whether the result works under pnpm's
+  `isolated` linker without changes.
 - [verify] The `allowBuilds` entries a fresh SDK 58 project actually needs.
 - [verify] Whether `android.blockedPermissions` and `android.permissions` behave as
   described on SDK 58.
@@ -188,5 +216,8 @@ off (`adb shell svc wifi disable`, `adb shell svc data disable`).
   run time for the tag workflow.
 - [verify] Maestro `extendedWaitUntil` with `id`, and passing `-e` variables, on the
   current Maestro release.
+- [verify] Gradle output paths and file names after `prebuild` on SDK 58.
+- [verify] `adb install -r` keeps app data for an APK signed with the same key, on the
+  emulator image used in CI.
 - [verify] Whether `jest-expo` and `@testing-library/react-native` versions are picked by
   `pnpm expo install`.
