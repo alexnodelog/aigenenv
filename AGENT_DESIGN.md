@@ -14,7 +14,10 @@ document is deployed before every skill an agent definition names exists, the wa
 rules into a subagent has been verified on the installed CLI, whether a subagent with no
 `skills:` field can invoke a skill has been verified on the installed CLI, and the human has
 confirmed
-that the machine agents run on holds no production credentials (§3).
+that the machine agents run on holds no production credentials (§3). Isolating agents at
+the OS level — no writes outside the repository, no access to personal credentials,
+network limited to what the task needs — is decided in step 7-2. Worktrees and the git
+checks here do not provide it.
 
 ---
 
