@@ -20,8 +20,8 @@ empty.
   Confirm with `java -version` and `adb --version`.
 - Maestro on Windows: download `maestro.zip` from the Maestro GitHub releases, extract to
   a stable path, add its `bin` to `PATH`, confirm with `maestro --help`.
-- New project: `pnpm create expo-app <name> --template default@sdk-58`, then
-  `pnpm expo install expo-dev-client`, then add `android/` and `ios/` to `.gitignore`.
+- New project: `pnpm create expo-app <name> --template default@sdk-58`, then `cd <name>`,
+  then `pnpm expo install expo-dev-client`, then add `android/` and `ios/` to `.gitignore`.
   The SDK number follows rule §1.
 - `pnpm-workspace.yaml`:
 
@@ -63,7 +63,7 @@ const config: ExpoConfig = {
     blockedPermissions: BLOCKED_PERMISSIONS,
     allowBackup: ALLOW_BACKUP,
   },
-  plugins: ["expo-router", "expo-sqlite", "expo-secure-store"],
+  plugins: ["expo-router", "expo-sqlite", "expo-secure-store", "./plugins/with-release-signing"],
 };
 
 export default config;
@@ -117,6 +117,17 @@ contract. Values are always passed in `params`, never built into `sql`.
 `new DatabaseSync(":memory:")` from `node:sqlite`, wrapping each call in a resolved promise
 and the transaction in `BEGIN IMMEDIATE` / `COMMIT` / `ROLLBACK`. Every adapter test opens
 a fresh connection and runs `migrations.ts` on it first.
+
+Backup before a migration (rule §4.3) — `backupDatabaseAsync` copies into an *open*
+database, not a path:
+
+```ts
+const dest = await openDatabaseAsync(`${DB_NAME}.backup-v${fromVersion}`);
+await backupDatabaseAsync({ sourceDatabase: db, destDatabase: dest });
+const { user_version } = (await dest.getFirstAsync<{ user_version: number }>("PRAGMA user_version", []))!;
+await dest.closeAsync();
+if (user_version !== fromVersion) throw new Error("backup does not report the old version");
+```
 
 This double is not `expo-sqlite`. Type conversion, error codes and the SQLite version can
 differ; the upgrade flow (rule §6) is what proves migrations on the real engine.
@@ -186,8 +197,9 @@ Upgrade flow (rule §6), from the second release on:
   7. APK checks (§5).
   8. Start an emulator (KVM), install the APK with `adb install`, run `maestro test maestro/flows/`,
      then the upgrade flow (this skill §6) on a fresh emulator.
-  9. `sha256sum` the APK into `<slug>-<version>.apk.sha256`; `gh release create` with both;
-     upload the AAB as a workflow artifact.
+  9. `sha256sum` the APK into `<slug>-<version>.apk.sha256`; `gh release create` with the
+     APK and its checksum only; upload the AAB as a workflow artifact, never to the
+     release.
 
 ## 8. Release
 
@@ -211,10 +223,10 @@ Upgrade flow (rule §6), from the second release on:
 - [verify] `node:sqlite` loaded inside Jest (`testEnvironment: "node"`) on the Node LTS in
   `devEngines.runtime`, and SQL behaviour differences from the SQLite bundled by
   `expo-sqlite`.
-- [verify] Argument shape of `backupDatabaseAsync` in `expo-sqlite` for SDK 58 (the native
-  function exists; the JS options object is unconfirmed).
+- [verify] `backupDatabaseAsync` unchanged in SDK 58 (confirmed in `expo-sqlite` 57.0.1).
 - [verify] Android emulator with KVM on standard GitHub-hosted ubuntu runners, and its
   run time for the tag workflow.
+- [verify] `maestro test <directory>` runs every flow in it; if not, CI lists each flow.
 - [verify] Maestro `extendedWaitUntil` with `id`, and passing `-e` variables, on the
   current Maestro release.
 - [verify] Gradle output paths and file names after `prebuild` on SDK 58.

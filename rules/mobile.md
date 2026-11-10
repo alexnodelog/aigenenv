@@ -138,7 +138,9 @@ after the cause of a build error is identified, never the first try.
   permissions through their config plugins; every one the app does not use is listed in
   `android.blockedPermissions`. The list of permissions the app uses is kept in
   `app.config.ts` and checked against the built APK (§5.3).
-- The core of the app works offline. A network call goes through an adapter, over HTTPS
+- Everything that reads or writes the app's own data works offline. A feature that exists
+  to talk to a server says so when there is no network, and the rest keeps working; the
+  smoke flow (§5.3) runs offline to prove it. A network call goes through an adapter, over HTTPS
   only, with a timeout, a visible failure state, and its response validated before use.
   Cleartext traffic stays disabled.
 - Data reaches the screen as `<Text>` children and component props. Rendering stored or
@@ -155,7 +157,9 @@ after the cause of a build error is identified, never the first try.
 - `android.allowBackup` is set explicitly in `app.config.ts` to the value the human
   chooses, and the choice is recorded in `DECISIONS.md`. Android's automatic backup copies the database to the user's cloud
   storage but not `expo-secure-store` values, so a restored install has data without its
-  credentials and MUST start working without them.
+  credentials and MUST start working without them. A row whose referenced file is missing
+  after a restore shows that file as missing; it MUST NOT crash the screen or delete the
+  row.
 - Uninstalling deletes every file the app kept. `README.md` tells users so, and what the
   export of §4.3 protects.
 
@@ -182,7 +186,8 @@ after the cause of a build error is identified, never the first try.
   then deletes the file it replaced. At startup, files in that directory that no row
   references are deleted; the sweep never touches anything outside it.
 - An app holding data its users cannot recreate offers export to a file through the share
-  sheet and import through the document picker. A lost or replaced phone loses everything
+  sheet and import through the document picker. An export holds the rows and every file
+  they reference, as one unit. A lost or replaced phone loses everything
   else. The format and what it covers are recorded in `DECISIONS.md` before the app holds
   real data.
 - Shipped migrations are append-only. Fixes are new migrations. A test records a checksum
@@ -382,7 +387,8 @@ Permission, config plugin, or `app.config.ts` change:
 
 Export or import change:
 
-- [ ] Tested importing into a fresh install; the rows match the source
+- [ ] Tested importing into a fresh install; the rows match the source and every file
+      reference resolves
 
 Dependency, SDK, or native configuration change:
 
