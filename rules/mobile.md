@@ -22,7 +22,7 @@ iOS is deferred. Nothing here builds, tests or ships for iOS; starting iOS work 
 |---|---|---|---|
 | Node.js | An LTS line the Expo SDK supports, installed by pnpm, pinned in `package.json` `devEngines.runtime` | — | Odd-numbered (non-LTS) majors; `.nvmrc`, nvm, fnm, Volta as the version record |
 | Packaging | pnpm, standalone install, exact version in `package.json` `packageManager`; `pnpm-lock.yaml`; `nodeLinker: isolated` (pnpm's default) | `nodeLinker: hoisted`, with the ADR naming the library that failed under `isolated` | npm, yarn, bun; Corepack; `npx` in scripts or docs; `enableGlobalVirtualStore` — Metro cannot resolve packages stored outside the project |
-| Language | TypeScript, `strict: true` | — | Plain JavaScript in new code |
+| Language | TypeScript, `strict: true` | — | Plain JavaScript in app or test code (a tool's config file MAY be `.js` when the tool requires it) |
 | Framework | Expo SDK 58 (React Native 0.88), Continuous Native Generation: `android/` and `ios/` are generated and gitignored | — | Bare React Native; committed native directories |
 | Native configuration | `app.config.ts` and config plugins, `expo-build-properties` for Gradle settings; a local config plugin in `plugins/` for what those cannot express, such as release signing | — | Editing anything under `android/` |
 | CLI | Expo CLI from the `expo` package, run as `pnpm expo` | EAS CLI, only with an EAS Alternative below, run as `pnpm dlx eas-cli@<exact version>` | `eas-cli` as a project dependency; a global install of either |
@@ -123,8 +123,9 @@ after the cause of a build error is identified, never the first try.
   for the app to close or to go to the background. Text being typed MAY stay in memory
   until it is confirmed. When the app returns to the foreground, the visible screen re-reads
   what it shows.
-- All JavaScript runs on one thread, which also handles touches. A list that grows with
-  the user's data is read and rendered in pages, never loaded whole. Parsing a file or any
+- All JavaScript runs on one thread, which also handles touches. A list of the user's
+  records is read and rendered in pages, never loaded whole, whatever its current size.
+  Fixed lists — settings, options — are not paged. Parsing a file or any
   other long job runs outside a render, and the screen shows that it is working.
 - A control that starts a write is disabled from the press until the use case finishes,
   so a second press cannot repeat it.
@@ -159,7 +160,9 @@ after the cause of a build error is identified, never the first try.
   storage but not `expo-secure-store` values, so a restored install has data without its
   credentials and MUST start working without them. A row whose referenced file is missing
   after a restore shows that file as missing; it MUST NOT crash the screen or delete the
-  row.
+  row. If `allowBackup` is true, `README.md` tells users that Android stops making new
+  backups once the app's data passes 25 MB and restores the last one it made, so the
+  export of §4.3 is the backup to rely on.
 - Uninstalling deletes every file the app kept. `README.md` tells users so, and what the
   export of §4.3 protects.
 
@@ -170,9 +173,10 @@ after the cause of a build error is identified, never the first try.
 - Repositories in `adapters/sqlite/` depend on `SqlConnection`, an interface in
   `connection.ts` naming only the `expo-sqlite` methods the app uses. Production passes the
   `expo-sqlite` database; tests pass an implementation over `node:sqlite` (§6).
-- A use case that writes more than once runs those writes in one
-  `withExclusiveTransactionAsync`. `withTransactionAsync` is PROHIBITED: other queries
-  issued meanwhile join its transaction. A failed use case leaves no partial write.
+- A use case that makes more than one database write runs them in one
+  `withExclusiveTransactionAsync`. File and network work stays outside the transaction.
+  `withTransactionAsync` is PROHIBITED: other queries issued meanwhile join its
+  transaction. A failed use case leaves no partial write.
 - Each migration and its `user_version` write run in the same transaction.
 - Before migrating an existing database, back it up beside the original with
   `backupDatabaseAsync`, and verify the backup opens and reports the old version. A file
@@ -367,7 +371,7 @@ around a prohibition when something does not work.
 Every task here:
 
 - [ ] Boundary check (§3) passes
-- [ ] No `*Sync` SQLite call; no list that grows with the user's data loaded whole
+- [ ] No `*Sync` SQLite call; no list of the user's records loaded whole
 - [ ] Screen tests find controls by role and label; no real-time waits
 
 Schema change:

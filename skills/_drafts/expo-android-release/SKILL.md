@@ -86,8 +86,9 @@ One line, so it runs unchanged in CMD, PowerShell and Bash.
   release. Record where in `DECISIONS.md` (the location, never the passwords).
 - CI secrets: `ANDROID_KEYSTORE_BASE64` (the file, base64), `ANDROID_KEYSTORE_PASSWORD`,
   `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`.
-- Signing is applied after `prebuild` by `plugins/with-release-signing.ts` (rule §1, Default),
-  which reads those variables into the release `signingConfig`; when they are absent it
+- Signing is applied during `prebuild` by `plugins/with-release-signing.ts` (rule §1, Default),
+  which edits the generated Gradle config to read those variables into the release
+  `signingConfig`; `prebuild --clean` reapplies it; when they are absent it
   MUST fail the release build, not fall back to the debug key.
 
 ## 4. SQLite test connection (rule §4.3, §6)
@@ -142,7 +143,8 @@ With Build-Tools on `PATH` (`$ANDROID_HOME/build-tools/<version>`):
 - Signer: `apksigner verify --print-certs app-release.apk` — SHA-256 equals the upload
   key's (`keytool -list -v -keystore upload.keystore`).
 - Manifest: `aapt2 dump badging app-release.apk` — `versionCode`, `versionName`,
-  `uses-permission` lines (compare with `USED_PERMISSIONS`), and no `application-debuggable`.
+  the names on `uses-permission` and `uses-permission-sdk-23` lines together equal
+  `USED_PERMISSIONS`, and no `application-debuggable`.
 - Contents: unzip to a temp dir; fail on `.env*` or `*.map`; run the project's secret check
   over the directory.
 
@@ -169,7 +171,8 @@ appId: <reverse.domain.app>
     timeout: 30000
 ```
 
-Run: `maestro test -e APP_VERSION=<version> maestro/flows/smoke.yaml`, with the emulator's network
+Run: `timeout 120 maestro test -e APP_VERSION=<version> maestro/flows/smoke.yaml` (`timeout`
+exits non-zero when the 120 s of rule §5.3 run out, so the step fails), with the emulator's network
 off (`adb shell svc wifi disable`, `adb shell svc data disable`).
 
 Upgrade flow (rule §6), from the second release on:
@@ -226,6 +229,7 @@ Upgrade flow (rule §6), from the second release on:
 - [verify] `backupDatabaseAsync` unchanged in SDK 58 (confirmed in `expo-sqlite` 57.0.1).
 - [verify] Android emulator with KVM on standard GitHub-hosted ubuntu runners, and its
   run time for the tag workflow.
+- [verify] Which permission line forms `aapt2` prints for an SDK 58 APK.
 - [verify] `maestro test <directory>` runs every flow in it; if not, CI lists each flow.
 - [verify] Maestro `extendedWaitUntil` with `id`, and passing `-e` variables, on the
   current Maestro release.
