@@ -535,17 +535,22 @@ plugin is a subdirectory of the program's repository with its own manifest. This
 codebase, one release, and a bundle that still works when the program is absent — it can
 say so instead of failing.
 
+**`npx` and `uvx` in the bundle.** The launch command in the bundle runs on the user's
+machine, where pnpm cannot be assumed, so the bundle's MCP configuration, its skill text,
+and the README's install section use `npx -y` or `uvx`. That is not a breach of the pnpm
+rule: it governs the project's own scripts, CI, and developer documentation.
+
 #### A. Instruction bundle
 
 | Category | Default | Alternative | Prohibited |
 |---|---|---|---|
-| Content format | Markdown with YAML front matter. Every command, skill, agent, and hook file carries at least a `description` — a missing one produces load errors | — | Instructions embedded in code strings |
-| Layout | Components at the plugin root: `skills/<name>/SKILL.md`, `agents/`, `commands/`, `hooks/`. Only the manifest sits in `.claude-plugin/plugin.json` | — | **Components inside `.claude-plugin/`** — the host reads that directory as manifest only |
+| Content format | Markdown with YAML front matter. Every skill, agent, and hook file carries at least a `description` — a missing one produces load errors | — | Instructions embedded in code strings |
+| Layout | Components at the plugin root: `skills/<name>/SKILL.md`, `agents/`, `hooks/hooks.json`, `.mcp.json`. Only the manifest sits in `.claude-plugin/plugin.json` | — | **Components inside `.claude-plugin/`** — the host reads that directory as manifest only. New files in `commands/` — the host documents commands as the older format that skills supersede. A `CLAUDE.md` at the plugin root — the host does not load it; instructions are skills. A top-level `bin/` — host-specific, and claude.ai and Cowork refuse to install a plugin that has one; executables ship through npm or PyPI |
 | Host manifests | The Claude Code manifest is canonical; manifests for other hosts are generated from it | One manifest when only one host is supported | Hand-maintained copies that drift |
 | Hooks | Hooks check, block, and log | — | A hook that auto-approves a tool call |
 | Bootstrap scripts | **None.** Markdown only | For a script that must run *before* any runtime exists: PowerShell on Windows and POSIX `sh` elsewhere, as a matched pair, with the reason recorded | A script where a skill is enough |
-| Validation | `claude plugin validate <path> --strict`, plus a check that every front matter block and internal link resolves | — | Releasing without validation |
-| Behaviour tests | **Scenario records**: for each skill, a fixed request and the expected behaviour, written down and re-run on each supported host | — | "It worked in my session" with no record |
+| Validation | `claude plugin validate <path> --strict`, which checks the manifests, front matter, `hooks/hooks.json` and `.mcp.json`; plus a check that every internal link resolves, which validate does not do | — | Releasing without validation |
+| Behaviour tests | **Scenario records**: for each skill, a fixed request and the expected behaviour, in Markdown. Written before the skill is added or its behaviour changed, and run then; re-run on each supported host before a release. Not run per commit | — | "It worked in my session" with no record; a host-specific eval tool as the only record |
 
 **Folder name to check.** At least one host treats a root `rules/` directory as its own
 rule location. A plugin storing rule files there MUST confirm no supported host claims the
@@ -567,13 +572,13 @@ which know about neither.
 |---|---|---|---|
 | Language | TypeScript on Node.js LTS — `npx` makes it runnable with nothing installed | Python, when the work needs Python libraries; run with `uvx` | A language the target users cannot run without a toolchain |
 | MCP SDK (TypeScript) | `@modelcontextprotocol/server` (SDK v2) | `@modelcontextprotocol/sdk` (v1) for an existing server; it receives fixes for at least six months past the v2 release | Framework wrappers adopted before the official SDK proves insufficient |
-| MCP SDK (Python) | `mcp`, which includes FastMCP | — | — |
+| MCP SDK (Python) | `mcp` 2.x; the server class is `MCPServer` (FastMCP was its v1 name) | — | `mcp<2` in a new server; the separate `fastmcp` package |
 | Transport | **stdio** — local, subprocess-isolated, what an AI coding tool launches | Streamable HTTP, only for a server that must be remote | Legacy HTTP+SSE |
 | Tool surface | Few tools, each doing one thing, with descriptions written for a model to choose between | — | Exposing every internal function as a tool |
-| Secrets | From the environment. stdio servers inherit them from the host's configuration | OAuth 2.1 for a remote HTTP server | Credentials in the server's config file or its repository |
+| Secrets | **None.** An executable that needs a user's credential for another service is decided by ADR before it is built | — | Credentials in the server's config file or its repository |
 | Filesystem reach | Only paths the caller passes in | — | Reading or writing outside them without being asked |
 | Offline operation | An environment switch that disables all outbound traffic | — | Silent network calls from a tool the user believes is local |
-| Testing | pytest or Vitest against the core functions, which are plain code | `npx @modelcontextprotocol/inspector` for manual tool checks | Testing only through the host's model |
+| Testing | pytest or Vitest against the core functions, which are plain code | `pnpm dlx @modelcontextprotocol/inspector@<exact version>` for manual tool checks | Testing only through the host's model |
 | Optional heavy dependencies | Declared optional, with the feature degrading and saying so when absent | — | A multi-hundred-megabyte install that every user pays for |
 
 **Why stdio is the default.** An AI coding tool launches the server as a subprocess on the
@@ -589,12 +594,21 @@ applies here as it does anywhere else.
 | Category | Default | Alternative | Prohibited |
 |---|---|---|---|
 | Bundle | GitHub repository with `.claude-plugin/marketplace.json` at its root | Listing in a third-party marketplace, in addition | Distributing files by hand |
-| Executable | npm for TypeScript, PyPI for Python, runnable with `npx` / `uvx` and no prior install | — | Install instructions that require cloning and building |
-| MCP discovery | An entry in the official MCP registry | — | — |
+| Executable | npm for TypeScript, PyPI for Python, runnable with `npx` / `uvx` and no prior install. Published by CI with trusted publishing (OIDC) and no stored token | — | Install instructions that require cloning and building; a long-lived publish token |
+| MCP discovery | An entry in the official MCP registry, published by CI with `mcp-publisher` logged in through GitHub OIDC | — | — |
 | Client registration | A `setup` command that writes the MCP configuration for whichever clients are installed | Documented manual configuration per client | Editing a client's config without saying what changed |
-| Versioning | Semantic Versioning, Git tags, from Conventional Commits. The bundle pins the executable to a major range | — | A skill pinned to `latest` |
+| Versioning | Semantic Versioning, Git tags, from Conventional Commits. The bundle pins the executable to a major range. The marketplace entry pins the bundle to the release tag and its commit SHA, so users never install from `main` | — | A skill pinned to `latest`; a marketplace entry that follows a branch |
 | Documentation | README stating the prerequisite, the supported hosts, each host's install command, and the manual fallback | — | Install steps only in a wiki |
 | Secrets | None anywhere in the bundle | — | Tokens in plugin files |
+
+**The first npm version.** npm accepts a trusted publisher only for a package that already
+exists; PyPI accepts one in advance. The first npm version is therefore published by CI with
+a short-lived granular token, which is revoked once trusted publishing is configured.
+
+**Why the marketplace pins a commit.** Every finished task is merged into `main`, so `main`
+holds work that has not been released. Pinning the entry to the release tag and its SHA means
+a user receives only what was approved for release. A release is the tag and the pin update
+together; if the tag's CI fails, the pin is not moved and users keep the previous version.
 
 ---
 
@@ -848,10 +862,12 @@ the cloud route is EAS (§5.7).
 |---|---|---|
 | Base items in §9.1 | As listed | — |
 | Each supported host tool | System, one per host | Needed to test the bundle, and each carries its own account or subscription for its model |
-| Node.js LTS, pnpm | System — required for a TypeScript executable | As in §9.6. Also needed by the MCP Inspector regardless of the server's language |
+| pnpm | System — standalone; required for a TypeScript executable | As in §9.6. Also needed by the MCP Inspector regardless of the server's language |
+| Node.js LTS | Installed by pnpm | Version in `devEngines.runtime`. No separate Node installer |
 | npm account | Account — publishing a TypeScript executable | Free |
 | PyPI account | Account — publishing a Python executable | Free |
-| MCP Inspector | Run via `npx`, not installed | Manual tool checks against a local server |
+| MCP Inspector | Run via `pnpm dlx` at an exact version, not installed | Manual tool checks against a local server |
+| `mcp-publisher` | CI only — publishing an MCP server | A tagged release, version and SHA-256 recorded in `DECISIONS.md` |
 | PowerShell / POSIX `sh` | Included with the OS | Only for the pre-runtime bootstrap case |
 | OS build toolchain | **None**, unless a dependency ships native code | Native modules fall back to §9.3's requirements |
 
