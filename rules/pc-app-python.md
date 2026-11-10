@@ -99,8 +99,8 @@ archetype), or if there is no window (a script).
 
 ### 4.1 GUI thread
 
-- Work that waits on I/O — a file, the database, the network, a subprocess — or loops over
-  data that grows with the user's use runs on a worker. Widgets are touched only from the GUI
+- Work that waits on I/O — a file, the database, the network, a subprocess — always runs on
+  a worker, and so does work that goes through all of the user's records. Widgets are touched only from the GUI
   thread; workers report by signal.
 - Pattern: `QThread` + worker `QObject`, `moveToThread`, start from `thread.started`,
   `finished` → `thread.quit` → `deleteLater`. Hold a reference to both until `finished`.
