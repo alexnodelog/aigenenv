@@ -100,7 +100,7 @@ archetype), or if there is no window (a script).
 ### 4.1 GUI thread
 
 - Work that waits on I/O — a file, the database, the network, a subprocess — or loops over
-  the user's data runs on a worker. Widgets are touched only from the GUI
+  data that grows with the user's use runs on a worker. Widgets are touched only from the GUI
   thread; workers report by signal.
 - Pattern: `QThread` + worker `QObject`, `moveToThread`, start from `thread.started`,
   `finished` → `thread.quit` → `deleteLater`. Hold a reference to both until `finished`.
@@ -144,8 +144,8 @@ archetype), or if there is no window (a script).
   refuse to open, and offer the user a way to open the backup's folder.
 - `user_version` higher than the app supports → refuse to open, tell the user to update.
 - An app holding data its users cannot recreate offers export to a file and import from
-  one, or keeps dated backups made with `sqlite3.Connection.backup`. Which, where, and
-  how many is recorded in `DECISIONS.md` before the app holds real data.
+  one, or keeps dated backups made with `sqlite3.Connection.backup`. Either holds the rows
+  and every file they reference, as one unit. Which, where, and how many is recorded in `DECISIONS.md` before the app holds real data.
 - Shipped migrations are append-only. Fixes are new migrations. A test records a checksum
   of every shipped migration and fails if one changes; a new migration adds its checksum in
   the release that ships it.
@@ -281,7 +281,8 @@ Work that writes both a file and the DB:
 
 Backup, export, or import change:
 
-- [ ] Tested restoring into an empty data directory; the rows match the source
+- [ ] Tested restoring into an empty data directory; the rows match the source and every
+      file reference resolves
 
 Packaging, dependencies, resources, or `main.py` change:
 
