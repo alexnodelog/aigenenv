@@ -115,7 +115,7 @@ without reading.
 
 | Tier | Examples | Gate |
 |---|---|---|
-| **Blocking** | Deleting files or branches, migrations, rewriting git history, force push, deploying, revoking credentials, spending money — **and** anything beyond the approved scope: modifying files the task did not name, or adding a dependency that was not asked for | Explain, then wait for explicit approval. Never proceed on silence |
+| **Blocking** | Deleting files or branches, migrations, rewriting git history, force push, deploying, revoking credentials, spending money — **and** anything beyond the approved scope: modifying files outside the task's stated scope (§5.1), or adding a dependency that was not asked for | Explain, then wait for explicit approval. Never proceed on silence |
 | **Notify** | Inside the approved scope, but others depend on it: upgrading a dependency the task already covers, changing the shape of a public interface, changing CI configuration | Proceed, then report in the same turn |
 | **Silent** | Everything else inside scope | Report at the end of the task |
 
