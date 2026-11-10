@@ -111,7 +111,9 @@ else.
 public interface; `check` for every other Standard task. The orchestrator states the mode
 in the spawn prompt; the reviewer does not choose it.
 
-**Merge check.** A verdict covers one commit, not the merge. After the human merges, the
+**Merge check.** A verdict covers one commit, not the merge. The human merges with a merge
+commit (`git merge --no-ff`); fast-forward, squash, and rebase merges are not used, since
+the check below needs the merge commit's two parents. After the human merges, the
 orchestrator lets the verdict stand only when both hold, with `state.md` and
 `known-issues.md` excluded throughout:
 
