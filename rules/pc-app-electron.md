@@ -191,8 +191,8 @@ it, and choosing it needs an ADR and its own rule.
   `user_version`, refuse to open, and offer the user a way to open the backup's folder.
 - `user_version` higher than the app supports → refuse to open, tell the user to update.
 - An app holding data its users cannot recreate offers export to a file and import from
-  one, or keeps dated backups made with `backup()`. Which, where, and how many is
-  recorded in `DECISIONS.md` before the app holds real data.
+  one, or keeps dated backups made with `backup()`. Either holds the rows and every file
+  they reference, as one unit. Which, where, and how many is recorded in `DECISIONS.md` before the app holds real data.
 - Shipped migrations are append-only. Fixes are new migrations. A test records a checksum
   of every shipped migration and fails if one changes; a new migration adds its checksum
   in the release that ships it.
@@ -389,7 +389,7 @@ Work that writes both a file and the DB:
 Backup, export, or import change:
 
 - [ ] Tested restoring a backup or importing an export into an empty data directory; the
-      rows match the source
+      rows match the source and every file reference resolves
 
 Packaging, dependencies, `main/index.ts`, the preload, `electron-builder.yml`, or the
 protocol handler change:
