@@ -4,8 +4,10 @@
 framework. `GLOBAL_RULES.md` decides *how* to build; this document decides *what to
 build with*.
 
-**Precedence.** `GLOBAL_RULES.md` → `TECH_STACK.md` → `rules/<project>.md` → current task.
-A project rule MAY narrow a choice made here. It MUST NOT widen one.
+**Precedence.** This document is not loaded in project sessions; rules are written from
+it, and what a project needs is copied into its rule files. A rule file MAY narrow a
+choice made here. It MUST NOT widen one. Session precedence:
+`GLOBAL_RULES.md` → `rules/<project>.md` → `CLAUDE.md` → current task.
 
 **RFC 2119.** MUST / MUST NOT / SHOULD / SHOULD NOT / MAY carry their RFC 2119 meaning.
 
@@ -903,8 +905,8 @@ that. On a restricted or filtered network, the column that matters is the middle
 
 | Archetype | First setup | Development loop | Release |
 |---|---|---|---|
-| `pc-app-python` | Network | **Fully offline** | Local build; network only to upload the artifact |
-| `pc-app-electron` | Network | **Fully offline** | Local build; network only to upload the artifact |
+| `pc-app-python` | Network | **Fully offline** | CI build (`GLOBAL_RULES.md` §12) |
+| `pc-app-electron` | Network | **Fully offline** | CI build (`GLOBAL_RULES.md` §12) |
 | `web-static` | Network | **Fully offline** | Network — the platform is the product |
 | `web-python` | Network | **Fully offline** | Network |
 | `web-ts` | Network | **Fully offline** | Network |
