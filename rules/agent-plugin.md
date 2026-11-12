@@ -15,8 +15,8 @@ site or API (a web archetype). Instructions for one repository only are that rep
 
 **Components.** Every project has the bundle. An executable is added only when the
 capability does not exist in the host: a binary file format, OCR, an authenticated API,
-anything needing a library. Most requests for "a small MCP server" are one skill. Rules
-marked **(B)** apply only to a project that has an executable.
+anything needing a library. Rules marked **(B)** apply only to a project that has an
+executable.
 
 ---
 
@@ -24,7 +24,7 @@ marked **(B)** apply only to a project that has an executable.
 
 | Category | Default | Alternative | Prohibited |
 |---|---|---|---|
-| Bundle format | Markdown with YAML front matter; every skill, agent and hook file has a `description` | — | Instructions inside code strings |
+| Bundle format | Markdown with YAML front matter; every skill and agent file has a `description` | — | Instructions inside code strings |
 | Components | `skills/<name>/SKILL.md`, `agents/<name>.md`, `hooks/hooks.json` | — | New files in `commands/` (superseded by skills); a `CLAUDE.md` in the bundle (not loaded); a top-level `bin/` (host-specific; claude.ai and Cowork refuse the plugin) |
 | Hosts | Claude Code; its manifest is canonical | Further hosts, each with a manifest generated from the canonical one | Hand-maintained manifest copies |
 | Hooks | Check, block, log | — | A hook that approves a tool call |
@@ -70,7 +70,7 @@ Nothing in the repository installs or reveals these. Procedure: skill `agent-plu
 │   ├── hooks/hooks.json
 │   ├── hooks/scripts/                what hooks.json runs, nothing else
 │   └── .mcp.json                     (B) launches the published package
-├── scenarios/<skill>.md              one scenario record per skill (§6)
+├── scenarios/<name>.md               scenario records, one file per skill or agent (§6)
 ├── scripts/                          sync_version.py, check_bundle.py
 ├── tests/                            hooks/; (B) core/, cli/, mcp/, boundaries
 ├── src/                              (B) core/, cli/, mcp/
@@ -110,13 +110,18 @@ Nothing in the repository installs or reveals these. Procedure: skill `agent-plu
 - A hook fires on every matching event in every session once the plugin is enabled, not
   only when its skill runs. Its matcher is no wider than its job, and every hook entry
   sets `timeout`. A hook script reads the event, decides, and exits; it does no other work.
+- Only an explicit block stops an event; a hook that crashes or times out lets it pass. A
+  hook that blocks harm therefore fails closed: an unreadable event, a missing tool or
+  unexpected input is answered with a block and its reason. It does nothing that can
+  approach its timeout.
 - A shipped agent definition has no `model` field — it inherits the user's session model —
   and lists `tools` explicitly, no more than its job needs.
 - **(B)** stdout belongs to the protocol. Logs and diagnostics go to stderr; a stray write
   to stdout breaks the connection.
 - **(B)** Few tools, each doing one thing, described for a model choosing between them.
-  Every outbound call has a timeout. One environment variable, documented in the README,
-  disables all outbound traffic.
+  Every outbound call has a timeout. `<PLUGIN>_OFFLINE=1` (the plugin name in upper case,
+  `-` as `_`) disables every outbound call; a tool that needs the network then returns an
+  error saying so. Unset, the executable makes only the calls the README declares.
 
 ### 4.2 Paths
 
@@ -126,8 +131,8 @@ Nothing in the repository installs or reveals these. Procedure: skill `agent-plu
 - The bundle's directory is read-only at runtime: it changes with every version.
 - **(B)** The executable reaches only paths its caller passed in. It does not search the
   user's home or project on its own.
-- Hook scripts run on every OS the README lists. A POSIX-only script on a Windows-supported
-  plugin is a defect.
+- Hook scripts run on every OS the README lists, and their tests run in CI on each of
+  them. A POSIX-only script on a Windows-supported plugin is a defect.
 
 ### 4.3 Persistence
 
@@ -178,8 +183,9 @@ Procedure: skill `agent-plugin-release`.
   (for major 1: `npx -y <pkg>@1`; `uvx --from '<pkg>>=1,<2' <cmd>`). These run on the
   user's machine, where pnpm cannot be assumed.
 - Before any feature beyond it is built, a walking skeleton — one skill, its scenario record,
-  and the executable if there is one — is released through §5.4 and installed from the
-  marketplace on every supported host.
+  and the executable if there is one — is loaded locally (`--plugin-dir`) and passes its
+  record on every supported host; **(B)** the packed-artifact check (§5.3) passes. The
+  marketplace is first used at the first release.
 
 ### 5.3 Self-check
 
@@ -188,7 +194,7 @@ each failure. It checks that:
 
 - `claude plugin validate --strict` passes for `plugin/` and for the marketplace;
 - every relative link and every `${CLAUDE_PLUGIN_ROOT}` path in `plugin/` resolves;
-- every skill has a scenario record and every record names an existing skill;
+- every skill and agent has a scenario record, and every record names an existing one;
 - every file `sync_version.py` writes holds the source version;
 - `plugin/` contains nothing §3 excludes and nothing §1 prohibits, and the project's secret
   check passes over it;
@@ -210,6 +216,10 @@ a test client lists its tools and closes, and the process exits.
   publishes the package and the registry entry. Only after every job succeeds does the
   agent commit the marketplace pin — `ref` the tag, `sha` its commit — to `main`. If CI
   fails, the pin does not move and users keep the previous version.
+- Each publish step first looks up its version on its registry and skips if it is already
+  there. After a partial failure the tag workflow is re-run, with the human's approval, and
+  resumes where it stopped; a partial failure is never a reason for a new version. A failed
+  pin commit is simply retried.
 - After release, confirm: the marketplace file on `main` names the tag; a fresh install from
   the marketplace shows the new version; **(B)** the launch command from `.mcp.json` prints
   it.
@@ -225,7 +235,8 @@ a test client lists its tools and closes, and the process exits.
 - Push / PR: the bundle check; hook script tests. **(B)** frozen install, lint, type check,
   build, tests including the boundary check, the packed-artifact check.
 - Version tag: all of the above, a check that the tag equals the source version, then
-  **(B)** publish, then the registry entry. Only the publish job has `id-token: write`.
+  one publish job — **(B)** the package, then **(B, MCP server)** the registry entry — the
+  only job with `id-token: write`.
 - Scenario records are not run in CI: they need a live host and a paid model.
 
 ---
@@ -243,7 +254,8 @@ a test client lists its tools and closes, and the process exits.
 
 - A scenario record holds: the request, phrased as a user would without naming the skill;
   the starting files; the expected observable result — which skill ran, what it produced —
-  and what MUST NOT happen. Each skill has at least one record whose request is unrelated
+  and what MUST NOT happen. An agent's record also names the agent expected to run and the
+  tools it may use. Each skill and agent has at least one record whose request is unrelated
   and MUST NOT trigger it.
 - A record is written before its skill is added or its behaviour changed, and run then.
   Before a release, every record is run on every supported host at the tagged commit, in a
@@ -264,12 +276,11 @@ around a prohibition when something does not work.
    `@modelcontextprotocol/sdk/server/mcp.js`. v2 is `from mcp.server import MCPServer` and
    `@modelcontextprotocol/server`.
 2. pnpm 9/10 setting names (`onlyBuiltDependencies`). pnpm 11 reads `allowBuilds`.
-3. A skill that does not trigger "fixed" by naming it in the scenario's request, or by a hook
-   that injects its instructions into every prompt. The fix is the description.
+3. A skill that does not trigger "fixed" by a hook that injects its instructions into every
+   prompt. The fix is the description.
 4. A credential the plugin may not hold obtained by telling the user to export an
    environment variable, or by a `userConfig` field the README calls optional.
-5. The marketplace entry switched to a branch or a relative path to release faster, or the
-   pin moved before the tag's CI finished.
+5. The marketplace entry switched to a branch or a relative path to release faster.
 
 ---
 
@@ -287,8 +298,8 @@ New skill or agent, or a change to what one does:
 
 Hook change:
 
-- [ ] Script tests pass for blocking and passing events; matcher no wider than the job;
-      `timeout` set
+- [ ] Script tests pass for blocking and passing events, and for an unreadable event,
+      which a blocking hook blocks; matcher no wider than the job; `timeout` set
 
 **(B)** any change:
 

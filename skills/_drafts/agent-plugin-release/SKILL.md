@@ -9,7 +9,7 @@ Raw procedures moved out of `rules/agent-plugin.md`. The rules they serve stay i
 (§2, §3, §5, §6). This draft leaves `_drafts/` only when the Unverified list at the end is
 empty. Steps marked (B) apply only when the project has an executable.
 
-## 1. New repository (rule §3)
+## 1. New repository (rule §3, §5.2)
 
 - Create the layout of rule §3. A project with no executable stops at `plugin/`,
   `scenarios/`, `scripts/`, `tests/hooks/`.
@@ -35,7 +35,8 @@ empty. Steps marked (B) apply only when the project has an executable.
   ```
 
   Version lives only in `plugin.json`; the entry carries no `version`.
-- Local trial without the marketplace: `claude --plugin-dir ./plugin`.
+- Local trial and walking skeleton: `claude --plugin-dir ./plugin`, then run the skill's
+  scenario record.
 
 ## 2. Skill, agent, hook files (rule §4.1)
 
@@ -57,11 +58,15 @@ empty. Steps marked (B) apply only when the project has an executable.
         "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/<name>.sh\"" } ] } ] } }
   ```
 
-  A blocking hook exits 2 with the reason on stderr; any other exit lets the event pass.
+  A blocking hook exits 2 with the reason on stderr. Any other exit, a crash or a timeout
+  lets the event pass, so a blocking script wraps its whole body: on any exception it
+  prints the reason to stderr and exits 2.
+- Windows listed in the README: the hook command and script language that run there are
+  decided once and recorded in `DECISIONS.md`; hook tests run on `windows-latest` too.
 
 ## 3. Scenario record (rule §6)
 
-`scenarios/<skill>.md`:
+`scenarios/<name>.md`, one per skill or agent:
 
 ```markdown
 # <skill>
@@ -69,7 +74,8 @@ empty. Steps marked (B) apply only when the project has an executable.
 ## <case name>
 - Request: <what a user types; does not name the skill>
 - Starting files: <none | list>
-- Expected: <skill that runs; what it produces>
+- Expected: <skill or agent that runs; what it produces>
+- Tools (agent only): <tools it may use>
 - Must not: <what would be wrong>
 
 ## unrelated request
@@ -100,7 +106,7 @@ claude-code <version>: <skill>/<case> pass, ...
 - `check_bundle.py`, in this order, collecting every failure before exiting:
   1. `claude plugin validate --strict plugin` and `claude plugin validate --strict .`
   2. Markdown links and `${CLAUDE_PLUGIN_ROOT}/...` paths under `plugin/` resolve.
-  3. Skill directories and `scenarios/*.md` match one to one.
+  3. Skill directories plus agent files and `scenarios/*.md` match one to one.
   4. `sync_version.py --check`.
   5. No `CLAUDE.md`, `commands/`, top-level `bin/`, test or scenario file under `plugin/`.
   6. No `@latest` and no unpinned `npx`/`uvx` argument under `plugin/`.
@@ -159,10 +165,13 @@ claude-code <version>: <skill>/<case> pass, ...
 - Tag workflow:
   1. Checks of the PR workflow.
   2. Fail if the tag is not `v` + the source version.
-  3. (B) Publish job, the only one with `permissions: id-token: write`: `pnpm publish` or
-     `uv publish`.
-  4. (B, MCP server) Download `mcp-publisher` at the version and SHA-256 recorded in
-     `DECISIONS.md`, `mcp-publisher login github-oidc`, `mcp-publisher publish`.
+  3. (B) One publish job, the only one with `permissions: id-token: write`:
+     a. If the version is not on npm or PyPI: `pnpm publish` or `uv publish`.
+     b. (MCP server) If the version is not in the MCP registry: download `mcp-publisher` at
+        the version and SHA-256 recorded in `DECISIONS.md`, `mcp-publisher login
+        github-oidc`, `mcp-publisher publish`.
+- Claude Code in CI, for `plugin validate`: installed at the exact version pinned in the
+  workflow (method under Unverified).
 
 ## 9. Release
 
@@ -170,7 +179,9 @@ claude-code <version>: <skill>/<case> pass, ...
 2. Run every scenario record on every supported host at that commit.
 3. Ask the human to approve the release, naming the version and what changed.
 4. Create the annotated tag with the results of step 2; push it.
-5. Wait for the tag workflow. If any job fails: stop, report, leave the pin.
+5. Wait for the tag workflow. If any job fails: stop, report, leave the pin. After the
+   cause is fixed and the human approves, re-run the same workflow; steps already done
+   skip themselves (§8).
 6. Update `ref` and `sha` in `.claude-plugin/marketplace.json`; commit to `main`; push.
 7. Confirm: `claude plugin marketplace update <marketplace>`, then install or update the
    plugin in a clean configuration and check its version; (B) run the `.mcp.json` launch
@@ -183,7 +194,12 @@ confirm as in step 7.
 
 - [verify] `claude plugin validate --strict` on the marketplace root with a `git-subdir`
   entry, and whether it runs in CI without signing in.
-- [verify] How to install a pinned Claude Code version on a GitHub-hosted runner.
+- [verify] How to install a pinned Claude Code version on a GitHub-hosted runner: the
+  native installer with a version argument, or the npm package (which would put Node in
+  CI for a project that has none).
+- [verify] Whether a crash (non-zero exit other than 2) and a timeout of a plugin hook let
+  the event pass, for each event the plugin uses.
+- [verify] Hook command execution on native Windows: which shell runs `command`.
 - [verify] A `git-subdir` source whose `url` is the marketplace's own repository: install,
   update to a new `sha`, and `claude plugin marketplace update` behaviour.
 - [verify] Whether Codex, reading `.claude-plugin/marketplace.json`, honours `git-subdir`
