@@ -544,7 +544,7 @@ rule: it governs the project's own scripts, CI, and developer documentation.
 
 | Category | Default | Alternative | Prohibited |
 |---|---|---|---|
-| Content format | Markdown with YAML front matter. Every skill, agent, and hook file carries at least a `description` — a missing one produces load errors | — | Instructions embedded in code strings |
+| Content format | Markdown with YAML front matter. Every skill and agent file carries at least a `description` — a missing one produces load errors | — | Instructions embedded in code strings |
 | Layout | Components at the plugin root: `skills/<name>/SKILL.md`, `agents/`, `hooks/hooks.json`, `.mcp.json`. Only the manifest sits in `.claude-plugin/plugin.json` | — | **Components inside `.claude-plugin/`** — the host reads that directory as manifest only. New files in `commands/` — the host documents commands as the older format that skills supersede. A `CLAUDE.md` at the plugin root — the host does not load it; instructions are skills. A top-level `bin/` — host-specific, and claude.ai and Cowork refuse to install a plugin that has one; executables ship through npm or PyPI |
 | Host manifests | The Claude Code manifest is canonical; manifests for other hosts are generated from it | One manifest when only one host is supported | Hand-maintained copies that drift |
 | Hooks | Hooks check, block, and log | — | A hook that auto-approves a tool call |
@@ -597,7 +597,7 @@ applies here as it does anywhere else.
 | Executable | npm for TypeScript, PyPI for Python, runnable with `npx` / `uvx` and no prior install. Published by CI with trusted publishing (OIDC) and no stored token | — | Install instructions that require cloning and building; a long-lived publish token |
 | MCP discovery | An entry in the official MCP registry, published by CI with `mcp-publisher` logged in through GitHub OIDC | — | — |
 | Client registration | A `setup` command that writes the MCP configuration for whichever clients are installed | Documented manual configuration per client | Editing a client's config without saying what changed |
-| Versioning | Semantic Versioning, Git tags, from Conventional Commits. The bundle pins the executable to a major range. The marketplace entry pins the bundle to the release tag and its commit SHA, so users never install from `main` | — | A skill pinned to `latest`; a marketplace entry that follows a branch |
+| Versioning | Semantic Versioning, Git tags, from Conventional Commits. The bundle pins the executable to the exact version released with it, so a published package reaches users only when the marketplace pin moves. The marketplace entry pins the bundle to the release tag and its commit SHA, so users never install from `main` | — | A skill pinned to `latest` or to a version range; a marketplace entry that follows a branch |
 | Documentation | README stating the prerequisite, the supported hosts, each host's install command, and the manual fallback | — | Install steps only in a wiki |
 | Secrets | None anywhere in the bundle | — | Tokens in plugin files |
 
