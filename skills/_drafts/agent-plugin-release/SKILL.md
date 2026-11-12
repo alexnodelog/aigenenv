@@ -108,7 +108,8 @@ claude-code <version>: <skill>/<case> pass, ...
   2. Markdown links and `${CLAUDE_PLUGIN_ROOT}/...` paths under `plugin/` resolve.
   3. Skill directories plus agent files and `scenarios/*.md` match one to one.
   4. `sync_version.py --check`.
-  5. No `CLAUDE.md`, `commands/`, top-level `bin/`, test or scenario file under `plugin/`.
+  5. No `CLAUDE.md`, `.claude/`, `commands/`, top-level `bin/`, test or scenario file under
+     `plugin/`, and no `SKILL.md` deeper than `plugin/skills/<name>/`.
   6. Every `npx`/`uvx` package argument under `plugin/` carries the source version.
 - Generated host manifests: written by `sync_version.py` from the canonical manifest when a
   second host is adopted; the mapping goes in the ADR adopting that host.
