@@ -74,7 +74,8 @@ empty. Steps marked (B) apply only when the project has an executable.
 ## <case name>
 - Request: <what a user types; does not name the skill>
 - Starting files: <none | list>
-- Expected: <skill or agent that runs; what it produces>
+- Expected trigger: <skill or agent that runs; no other>
+- Expected output: <what it produces>
 - Tools (agent only): <tools it may use>
 - Must not: <what would be wrong>
 
@@ -84,13 +85,15 @@ empty. Steps marked (B) apply only when the project has an executable.
 ```
 
 Running a record: new session in an empty directory holding the starting files, only this
-plugin enabled, no `CLAUDE.md`. Type the request, compare with Expected and Must not, write
-pass or fail.
+plugin enabled, no `CLAUDE.md`. Type the request. Read from the transcript which skill or
+agent ran; compare the files and answer with Expected output; check Must not. Write three
+verdicts — trigger, output, must-not — and pass only when all three pass.
 
 Tag annotation at release:
 
 ```
 v1.2.0
+commit <sha>
 claude-code <version>: <skill>/<case> pass, ...
 <host> <version>: ...
 ```
@@ -101,8 +104,8 @@ claude-code <version>: <skill>/<case> pass, ...
   as `uv run scripts/<name>.py`.
 - `sync_version.py`: read `plugin/.claude-plugin/plugin.json` `version`; write it into
   `package.json` or `pyproject.toml`, `server.json` (`version` and each `packages[].version`),
-  the package version in `plugin/.mcp.json`, and each generated host manifest. With `--check`, write nothing and exit 1 on any
-  difference.
+  the package version in `plugin/.mcp.json`, and each generated host manifest. With
+  `--check`, write nothing and exit 1 on any difference.
 - `check_bundle.py`, in this order, collecting every failure before exiting:
   1. `claude plugin validate --strict plugin` and `claude plugin validate --strict .`
   2. Markdown links and `${CLAUDE_PLUGIN_ROOT}/...` paths under `plugin/` resolve.
@@ -148,6 +151,9 @@ claude-code <version>: <skill>/<case> pass, ...
 - Packed-artifact check: `pnpm pack` (or `uv build`), install the tarball or wheel into a temp
   directory, run `<cmd> --version`, then a Vitest/pytest test that starts `<cmd> mcp` over
   stdio with the SDK client, calls list-tools, closes, and asserts the process exited.
+  Then list the artifact's files (`tar -tzf` or `unzip -l`), compare them with the `files`
+  allow-list or the wheel's expected contents, and run the secret check on the unpacked
+  artifact.
 - Manual tool check: `pnpm dlx @modelcontextprotocol/inspector@<exact> <cmd> mcp`.
 
 ## 7. Registries, one-time setup (B)
@@ -166,9 +172,13 @@ claude-code <version>: <skill>/<case> pass, ...
   check, build, tests, packed-artifact check.
 - Tag workflow:
   1. Checks of the PR workflow.
-  2. Fail if the tag is not `v` + the source version.
+  2. Fail if the tag is not `v` + the source version, or if
+     `git merge-base --is-ancestor $GITHUB_SHA origin/main` fails (needs full history:
+     `fetch-depth: 0`).
   3. (B) One publish job, the only one with `permissions: id-token: write`:
-     a. If the version is not on npm or PyPI: `pnpm publish` or `uv publish`.
+     a. If the version is not on npm or PyPI: `pnpm publish` or `uv publish`. If it is
+        there, read its provenance; continue only if it names this repository and
+        `$GITHUB_SHA`, else fail.
      b. (MCP server) If the version is not in the MCP registry: download `mcp-publisher` at
         the version and SHA-256 recorded in `DECISIONS.md`, `mcp-publisher login
         github-oidc`, `mcp-publisher publish`.
@@ -179,8 +189,10 @@ claude-code <version>: <skill>/<case> pass, ...
 
 1. Bump `version` in `plugin.json`; `uv run scripts/sync_version.py`; commit.
 2. Run every scenario record on every supported host at that commit.
-3. Ask the human to approve the release, naming the version and what changed.
-4. Create the annotated tag with the results of step 2; push it.
+3. Ask the human to approve the release, naming the version, the commit SHA and what
+   changed.
+4. Create the annotated tag on that SHA (`git tag -a v<version> <sha>`) with the results of
+   step 2; push it.
 5. Wait for the tag workflow. If any job fails: stop, report, leave the pin. After the
    cause is fixed and the human approves, re-run the same workflow; steps already done
    skip themselves (§8).
@@ -193,6 +205,10 @@ Rollback: set `ref` and `sha` back to the previous tag, with the human's approva
 confirm as in step 7.
 
 ## Unverified
+
+- [verify] Reading provenance of an existing version: npm (attestations endpoint or
+  `npm view`) and PyPI (attestations API) — field that holds the repository and commit.
+- [verify] Where the Claude Code transcript shows which skill or agent ran.
 
 - [verify] `claude plugin validate --strict` on the marketplace root with a `git-subdir`
   entry, and whether it runs in CI without signing in.

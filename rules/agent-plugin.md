@@ -14,7 +14,7 @@ site or API (a web archetype). Instructions for one repository only are that rep
 `CLAUDE.md` and `.claude/`, not a plugin.
 
 **Components.** Every project has the bundle. An executable is added only when the
-capability does not exist in the host: a binary file format, OCR, an authenticated API,
+capability does not exist in the host: a binary file format, OCR,
 anything needing a library. Rules marked **(B)** apply only to a project that has an
 executable.
 
@@ -110,12 +110,13 @@ Nothing in the repository installs or reveals these. Procedure: skill `agent-plu
   is missing, the skill says what to install and stops; it MUST NOT improvise the
   capability in shell commands.
 - A hook fires on every matching event in every session once the plugin is enabled, not
-  only when its skill runs. Its matcher is no wider than its job, and every hook entry
+  only when its skill runs. Its matcher lists the tools it acts on, and every hook entry
   sets `timeout`. A hook script reads the event, decides, and exits; it does no other work.
-- Only an explicit block stops an event; a hook that crashes or times out lets it pass. A
-  hook that blocks harm therefore fails closed: an unreadable event, a missing tool or
-  unexpected input is answered with a block and its reason. It does nothing that can
-  approach its timeout.
+- Only an explicit block stops an event. A guarding hook answers every failure it can catch
+  — an unreadable event, a missing tool, unexpected input — with a block and its reason,
+  and makes no network call. A crash or a timeout still lets the event pass, so a hook is
+  never the only safeguard of an action that cannot be undone: that action still waits for
+  the human's approval.
 - A shipped agent definition has no `model` field — it inherits the user's session model —
   and lists `tools` explicitly, no more than its job needs.
 - An agent that reviews or verifies has no write or edit tools. An author and a checker with
@@ -133,8 +134,9 @@ Nothing in the repository installs or reveals these. Procedure: skill `agent-plu
   hook commands. Absolute paths, `~` and paths relative to the working directory are
   PROHIBITED.
 - The bundle's directory is read-only at runtime: it changes with every version.
-- **(B)** The executable reaches only paths its caller passed in. It does not search the
-  user's home or project on its own.
+- **(B)** The executable reaches only paths its caller passed in, and treats each as
+  external input: a model wrote it. It does not search the user's home or project on its
+  own.
 - Hook scripts run on every OS the README lists, and their tests run in CI on each of
   them. A POSIX-only script on a Windows-supported plugin is a defect.
 
@@ -148,7 +150,7 @@ Nothing in the repository installs or reveals these. Procedure: skill `agent-plu
 
 ### 4.4 Settings, credentials, errors
 
-- Values the user must supply are declared in the manifest's `userConfig`. Telling the user
+- Non-secret values the user must supply are declared in the manifest's `userConfig`. Telling the user
   to edit a host's settings file by hand is PROHIBITED.
 - The plugin holds no credentials. An executable that needs a user's credential for another
   service is decided by ADR before it is built. The bundle contains no tokens.
@@ -208,7 +210,9 @@ each failure. It checks that:
 
 **(B)** After the build, the packed artifact is installed into a temporary directory and,
 offline: `<cmd> --version` prints the source version; an MCP server is started over stdio,
-a test client lists its tools and closes, and the process exits.
+a test client lists its tools and closes, and the process exits. The artifact's file list
+matches the package's allow-list, and the project's secret check passes over the artifact
+itself, not only the tree.
 
 ### 5.4 Package
 
@@ -218,12 +222,14 @@ a test client lists its tools and closes, and the process exits.
 | **(B)** the package | npm or PyPI |
 | **(B, MCP server)** `server.json` | The official MCP registry |
 
-- A release is one approval for two steps. The agent pushes the tag; CI checks, then
+- A release is one approval for two steps. The human approves a version and the commit
+  SHA it is cut from; the agent tags exactly that commit and pushes the tag; CI checks, then
   publishes the package and the registry entry. Only after every job succeeds does the
   agent commit the marketplace pin — `ref` the tag, `sha` its commit — to `main`. If CI
   fails, the pin does not move and users keep the previous version.
-- Each publish step first looks up its version on its registry and skips if it is already
-  there. After a partial failure the tag workflow is re-run, with the human's approval, and
+- Each publish step first looks up its version on its registry. It skips if the version is
+  there and its provenance names this repository and the tag's commit; a version that is
+  there without that match stops the release. After a partial failure the tag workflow is re-run, with the human's approval, and
   resumes where it stopped; a partial failure is never a reason for a new version. A failed
   pin commit is simply retried.
 - After release, confirm: the marketplace file on `main` names the tag; a fresh install from
@@ -240,7 +246,8 @@ a test client lists its tools and closes, and the process exits.
 
 - Push / PR: the bundle check; hook script tests. **(B)** frozen install, lint, type check,
   build, tests including the boundary check, the packed-artifact check.
-- Version tag: all of the above, a check that the tag equals the source version, then
+- Version tag: all of the above, a check that the tag equals the source version and that its
+  commit is on `main`, then
   one publish job — **(B)** the package, then **(B, MCP server)** the registry entry — the
   only job with `id-token: write`.
 - Scenario records are not run in CI: they need a live host and a paid model.
@@ -263,6 +270,9 @@ a test client lists its tools and closes, and the process exits.
   and what MUST NOT happen. An agent's record also names the agent expected to run and the
   tools it may use. Each skill and agent has at least one record whose request is unrelated
   and MUST NOT trigger it.
+- A record is judged on three counts, each pass or fail: trigger — the expected skill or
+  agent ran and no other did; output; and what MUST NOT happen. It passes only when all
+  three do.
 - A record is written before its skill is added or its behaviour changed, and run then.
   Before a release, every record is run on every supported host at the tagged commit, in a
   session with no other plugin and no project instructions that could produce the result.
@@ -286,7 +296,6 @@ around a prohibition when something does not work.
    prompt. The fix is the description.
 4. A credential the plugin may not hold obtained by telling the user to export an
    environment variable, or by a `userConfig` field the README calls optional.
-5. The marketplace entry switched to a branch or a relative path to release faster.
 
 ---
 
