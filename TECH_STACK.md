@@ -520,7 +520,7 @@ to three components, and a project takes only the ones it needs.
 
 | Component | When |
 |---|---|
-| **A. Instruction bundle** | Always. Skills, agents, commands, hooks — Markdown the host reads |
+| **A. Bundle** | Always. Skills and agents the host reads, plus the hook configuration and any scripts those hooks run |
 | **B. Executable** | Only when instructions cannot do the work: a CLI, an MCP server, or both from one codebase |
 | **C. Distribution** | Always. How a user installs A, B, or both |
 
@@ -540,15 +540,17 @@ machine, where pnpm cannot be assumed, so the bundle's MCP configuration, its sk
 and the README's install section use `npx -y` or `uvx`. That is not a breach of the pnpm
 rule: it governs the project's own scripts, CI, and developer documentation.
 
-#### A. Instruction bundle
+#### A. Bundle
 
 | Category | Default | Alternative | Prohibited |
 |---|---|---|---|
-| Content format | Markdown with YAML front matter. Every skill and agent file carries at least a `description` — a missing one produces load errors | — | Instructions embedded in code strings |
-| Layout | Components at the plugin root: `skills/<name>/SKILL.md`, `agents/`, `hooks/hooks.json`, `.mcp.json`. Only the manifest sits in `.claude-plugin/plugin.json` | — | **Components inside `.claude-plugin/`** — the host reads that directory as manifest only. New files in `commands/` — the host documents commands as the older format that skills supersede. A `CLAUDE.md` at the plugin root — the host does not load it; instructions are skills. A top-level `bin/` — host-specific, and claude.ai and Cowork refuse to install a plugin that has one; executables ship through npm or PyPI |
+| Content format | Markdown with YAML front matter for skills and agents; JSON for `hooks.json`. Every skill and agent file carries at least a `description` — a missing one produces load errors, and a skill is only reached when its description matches the situation, so it is written as the trigger condition rather than a summary | — | Instructions embedded in code strings. A `description` that summarises the skill instead of saying when to use it |
+| Layout | Components at the plugin root: `skills/<name>/SKILL.md`, `agents/<name>.md`, `hooks/hooks.json`, `hooks/scripts/`, `.mcp.json`. Only the manifest sits in `.claude-plugin/plugin.json`. Skill discovery reads one level only, so `skills/<group>/<name>/SKILL.md` is not found | — | **Components inside `.claude-plugin/`** — the host reads that directory as manifest only. **A `.claude/` directory anywhere in the plugin** — a host defect has been reported where its presence makes the root `skills/` directory invisible. New files in `commands/` — the host documents commands as the older format that skills supersede. A `CLAUDE.md` at the plugin root — the host does not load it; instructions are skills. A top-level `bin/` — host-specific, and claude.ai and Cowork refuse to install a plugin that has one; executables ship through npm or PyPI |
 | Host manifests | The Claude Code manifest is canonical; manifests for other hosts are generated from it | One manifest when only one host is supported | Hand-maintained copies that drift |
-| Hooks | Hooks check, block, and log | — | A hook that auto-approves a tool call |
-| Bootstrap scripts | **None.** Markdown only | For a script that must run *before* any runtime exists: PowerShell on Windows and POSIX `sh` elsewhere, as a matched pair, with the reason recorded | A script where a skill is enough |
+| Agent definitions | `agents/<name>.md`: a `description` stating when the host should delegate to it, an explicit `tools` allowlist, a model tier, and the system prompt as the body | — | No `tools` field — the agent then inherits everything the session can do. Write or edit tools on an agent whose job is to review or verify. Preloading skills into an agent that does not need them, which costs its whole context on every spawn |
+| Hooks | Configuration in `hooks/hooks.json`; the checks themselves in `hooks/scripts/` | — | A hook that auto-approves a tool call |
+| Hook scripts | TypeScript or Python from the Common Stack. A non-zero exit blocks the action; the script states a time limit and keeps well inside it | PowerShell on Windows and POSIX `sh` elsewhere, as a matched pair, when the hook must run before any runtime exists | A hook slower than the action it guards. A hook that writes outside the paths it was handed, or reaches the network |
+| Other scripts | **None.** Skills and hook scripts are the only executable content in the bundle | A bootstrap script, under the same language rule as hooks, with the reason recorded | A script where a skill is enough |
 | Validation | `claude plugin validate <path> --strict`, which checks the manifests, front matter, `hooks/hooks.json` and `.mcp.json`; plus a check that every internal link resolves, which validate does not do | — | Releasing without validation |
 | Behaviour tests | **Scenario records**: for each skill, a fixed request and the expected behaviour, in Markdown. Written before the skill is added or its behaviour changed, and run then; re-run on each supported host before a release. Not run per commit | — | "It worked in my session" with no record; a host-specific eval tool as the only record |
 
