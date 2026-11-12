@@ -101,7 +101,7 @@ claude-code <version>: <skill>/<case> pass, ...
   as `uv run scripts/<name>.py`.
 - `sync_version.py`: read `plugin/.claude-plugin/plugin.json` `version`; write it into
   `package.json` or `pyproject.toml`, `server.json` (`version` and each `packages[].version`),
-  and each generated host manifest. With `--check`, write nothing and exit 1 on any
+  the package version in `plugin/.mcp.json`, and each generated host manifest. With `--check`, write nothing and exit 1 on any
   difference.
 - `check_bundle.py`, in this order, collecting every failure before exiting:
   1. `claude plugin validate --strict plugin` and `claude plugin validate --strict .`
@@ -109,7 +109,7 @@ claude-code <version>: <skill>/<case> pass, ...
   3. Skill directories plus agent files and `scenarios/*.md` match one to one.
   4. `sync_version.py --check`.
   5. No `CLAUDE.md`, `commands/`, top-level `bin/`, test or scenario file under `plugin/`.
-  6. No `@latest` and no unpinned `npx`/`uvx` argument under `plugin/`.
+  6. Every `npx`/`uvx` package argument under `plugin/` carries the source version.
 - Generated host manifests: written by `sync_version.py` from the canonical manifest when a
   second host is adopted; the mapping goes in the ADR adopting that host.
 
@@ -139,10 +139,11 @@ claude-code <version>: <skill>/<case> pass, ...
 - `plugin/.mcp.json`:
 
   ```json
-  { "mcpServers": { "<server>": { "command": "npx", "args": ["-y", "<pkg>@1", "mcp"] } } }
+  { "mcpServers": { "<server>": { "command": "npx", "args": ["-y", "<pkg>@1.2.0", "mcp"] } } }
   ```
 
-  Python: `"command": "uvx", "args": ["--from", "<pkg>>=1,<2", "<cmd>", "mcp"]`.
+  Python: `"command": "uvx", "args": ["<pkg>@1.2.0", "mcp"]` (the command name equals the package name; otherwise `["--from", "<pkg>==1.2.0", "<cmd>", "mcp"]`).
+  `sync_version.py` writes the version into both forms.
 - Packed-artifact check: `pnpm pack` (or `uv build`), install the tarball or wheel into a temp
   directory, run `<cmd> --version`, then a Vitest/pytest test that starts `<cmd> mcp` over
   stdio with the SDK client, calls list-tools, closes, and asserts the process exited.

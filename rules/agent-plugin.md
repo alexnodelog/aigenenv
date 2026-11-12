@@ -175,12 +175,14 @@ Procedure: skill `agent-plugin-release`.
 - A project with no executable has no build: the bundle ships as written.
 - `version` in `plugin/.claude-plugin/plugin.json` is the single source.
   `scripts/sync_version.py` writes it into `package.json` or `pyproject.toml`, `server.json`,
-  and every generated host manifest; those files are never edited by hand.
+  the launch command in `plugin/.mcp.json`, and every generated host manifest; those files are never edited by hand.
 - **(B, TypeScript)** `pnpm build` runs `tsc --noEmit`, then compiles to `dist/`.
   `package.json` `files` lists only `dist/` and the licence; `bin` points at a `dist/`
   entry. **(B, Python)** `uv build`; the command is a `[project.scripts]` entry.
-- **(B)** `plugin/.mcp.json` launches the published package, pinned to its major version
-  (for major 1: `npx -y <pkg>@1`; `uvx --from '<pkg>>=1,<2' <cmd>`). These run on the
+- **(B)** `plugin/.mcp.json` launches the published package at the exact version released
+  with it (`npx -y <pkg>@<version>`; `uvx <pkg>@<version>`), written by `sync_version.py`. A
+  version range is PROHIBITED: it would hand users a package before the pin moves. These
+  run on the
   user's machine, where pnpm cannot be assumed.
 - Before any feature beyond it is built, a walking skeleton — one skill, its scenario record,
   and the executable if there is one — is loaded locally (`--plugin-dir`) and passes its
@@ -198,7 +200,7 @@ each failure. It checks that:
 - every file `sync_version.py` writes holds the source version;
 - `plugin/` contains nothing §3 excludes and nothing §1 prohibits, and the project's secret
   check passes over it;
-- no launch command or skill names `@latest` or an unpinned package.
+- every launch command and skill names a package at the source version — no `@latest`, no range.
 
 **(B)** After the build, the packed artifact is installed into a temporary directory and,
 offline: `<cmd> --version` prints the source version; an MCP server is started over stdio,
