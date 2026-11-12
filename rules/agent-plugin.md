@@ -25,7 +25,7 @@ executable.
 | Category | Default | Alternative | Prohibited |
 |---|---|---|---|
 | Bundle format | Markdown with YAML front matter; every skill and agent file has a `description` | — | Instructions inside code strings |
-| Components | `skills/<name>/SKILL.md`, `agents/<name>.md`, `hooks/hooks.json` | — | New files in `commands/` (superseded by skills); a `CLAUDE.md` in the bundle (not loaded); a top-level `bin/` (host-specific; claude.ai and Cowork refuse the plugin) |
+| Components | `skills/<name>/SKILL.md`, `agents/<name>.md`, `hooks/hooks.json` | — | New files in `commands/` (superseded by skills); a `CLAUDE.md` in the bundle (not loaded); a top-level `bin/` (host-specific; claude.ai and Cowork refuse the plugin); a `.claude/` directory anywhere in the bundle (a host defect has been reported where it makes the root `skills/` invisible) |
 | Hosts | Claude Code; its manifest is canonical | Further hosts, each with a manifest generated from the canonical one | Hand-maintained manifest copies |
 | Hooks | Check, block, log | — | A hook that approves a tool call |
 | Bootstrap scripts | None | A script that must run before any runtime exists: PowerShell and POSIX `sh` as a matched pair | A script where a skill is enough |
@@ -80,6 +80,8 @@ Nothing in the repository installs or reveals these. Procedure: skill `agent-plu
 
 - Everything a user needs is in `plugin/`, and nothing else is: no tests, scenarios, notes
   or build files.
+- Skills sit directly under `plugin/skills/`. Discovery reads one level, so
+  `skills/<group>/<name>/SKILL.md` is never found; skills are not grouped.
 - A project with no executable has no `src/`, package files or `server.json`, and MUST NOT
   add them to match this layout.
 - A directory a supported host claims for itself — at least one host reads a root `rules/`
@@ -116,6 +118,8 @@ Nothing in the repository installs or reveals these. Procedure: skill `agent-plu
   approach its timeout.
 - A shipped agent definition has no `model` field — it inherits the user's session model —
   and lists `tools` explicitly, no more than its job needs.
+- An agent that reviews or verifies has no write or edit tools. An author and a checker with
+  the same permissions do not make an independent check.
 - **(B)** stdout belongs to the protocol. Logs and diagnostics go to stderr; a stray write
   to stdout breaks the connection.
 - **(B)** Few tools, each doing one thing, described for a model choosing between them.
