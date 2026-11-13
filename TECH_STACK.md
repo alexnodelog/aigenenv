@@ -741,8 +741,8 @@ switching changes one CI step.
 **GitHub Free and private repositories.** Environments, environment secrets, deployment
 protection rules and rulesets are available only in public repositories on GitHub Free.
 In a private Free repository every secret is a repository secret, readable by any workflow
-any pusher writes; the deployment module's rule follows from that. Whether immutable
-releases are available in private Free repositories was not verified.
+any pusher writes; the deployment module's rule follows from that. Immutable releases
+carry no plan restriction in GitHub Docs.
 
 **`pull_request_target`.** GitHub blocks it by default in public repositories from
 2 December 2026 because it runs with the base repository's secrets. It is prohibited here
