@@ -51,7 +51,7 @@ them read-only with `gh api` before the first workflow lands; the human changes 
 |---|---|
 | Actions policy "Require actions to be pinned to a full-length commit SHA" | Repository setting, every project |
 | Workflow permissions: read repository contents; "Allow GitHub Actions to create and approve pull requests" off | Repository setting, every project |
-| Immutable releases | Repository setting, archetypes that publish GitHub Release files. Not verified on private Free repositories; if unavailable, `DECISIONS.md` records it |
+| Immutable releases | Repository setting, archetypes that publish GitHub Release files |
 | `release` environment: deployment tags `v*` only, required reviewer the owner, holding every release secret | Public repository only |
 | Agent's Git credential without push access | Private repository on GitHub Free (§4.3) |
 | zizmor | CI only, `uvx zizmor==<version>` |
@@ -90,8 +90,10 @@ them read-only with `gh api` before the first workflow lands; the human changes 
   approval.
 - `pull_request_target`, `workflow_run`, and any trigger fired by a comment are
   PROHIBITED: they run with the base repository's secrets and write token.
-- `release.yml` sets `concurrency` with `cancel-in-progress: false`; two releases never run
-  at once and none is cut off halfway.
+- `release.yml` sets `concurrency: { group: release, cancel-in-progress: false }` — one
+  fixed group for every tag. GitHub keeps only one waiting run per group and cancels an
+  older waiting one, so the next tag is pushed only after the previous release run has
+  finished.
 - Event fields — branch name, tag name, PR title and body, commit message — are external
   input. A `run:` script never contains `${{ github.event.* }}`, `${{ github.head_ref }}`
   or a step output inline; it reads them from `env:`, quoted.
@@ -170,8 +172,9 @@ Run in `ci.yml` on every push and pull request, before the archetype's checks:
 - Gitleaks over the full history (`fetch-depth: 0`). An allowlist entry in
   `.gitleaks.toml` covers a path under `tests/` only, with its reason.
 
-`release.yml` runs Gitleaks over the tagged tree before anything is built — the secret
-check `GLOBAL_RULES.md` §12 requires.
+`release.yml` starts, before anything is built, by failing unless the tag's commit is on
+`main` (`git merge-base --is-ancestor`), then runs zizmor and Gitleaks over the full
+history reachable from the tag. A result from an earlier `ci.yml` run is not reused.
 
 ### 5.4 Package
 
@@ -181,20 +184,22 @@ For archetypes that publish downloaded files:
   file and `SHA256SUMS`; publish only after every job of the run succeeded. Nothing is
   attached or replaced after publishing; a defective release is followed by a new version.
 - After publishing, CI downloads the assets back and runs `sha256sum -c SHA256SUMS`.
-- `README.md` shows how to check a download: `sha256sum -c` on Linux and macOS,
-  `Get-FileHash` on Windows, or `gh release verify-asset`.
+- `README.md` shows how to check a download: `sha256sum -c SHA256SUMS` on Linux,
+  `shasum -a 256 -c SHA256SUMS` on macOS, `Get-FileHash -Algorithm SHA256` on Windows, or
+  `gh release verify-asset` anywhere.
 
 For every archetype:
 
 - The agent proposes the next version from the Conventional Commits since the previous tag
   — a breaking change raises major (minor before 1.0.0), `feat` raises minor, anything
   else patch — together with the commit SHA and release notes grouped the same way. The
-  human approves that version and that commit.
+  human approves that version and that commit. Before the tag is pushed,
+  `git rev-parse v<version>^{commit}` equals the approved SHA.
 
 ### 5.5 CI
 
 - Push / PR: §5.3, then the archetype's list.
-- Version tag: Gitleaks over the tree, the archetype's list, then publishing — the jobs
+- Version tag: the start of `release.yml` in §5.3, the archetype's list, then publishing — the jobs
   holding release secrets on `environment: release` in a public repository — then §5.4's
   download check where it applies.
 
@@ -252,4 +257,5 @@ Release:
 
 - [ ] Version proposal names the version, the commit SHA, the notes, and any change to
       `release.yml` since the previous release
+- [ ] The tag resolved to the approved SHA before it was pushed
 - [ ] Downloaded files: `SHA256SUMS` attached before publishing; the download check passed
