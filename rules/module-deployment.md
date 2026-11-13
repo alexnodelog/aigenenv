@@ -86,14 +86,16 @@ them read-only with `gh api` before the first workflow lands; the human changes 
 ### 4.1 Triggers and untrusted input
 
 - `ci.yml`: `push` to `main`, `pull_request`. `release.yml`: `push` of tags `v*`, and
-  `workflow_dispatch` only to re-run a release of an existing tag with the human's
-  approval.
+  `workflow_dispatch`, with the human's approval, only to resume a release of an existing
+  tag that published nothing or left its GitHub Release a draft. What was published is
+  never rebuilt or republished.
 - `pull_request_target`, `workflow_run`, and any trigger fired by a comment are
   PROHIBITED: they run with the base repository's secrets and write token.
 - `release.yml` sets `concurrency: { group: release, cancel-in-progress: false }` — one
   fixed group for every tag. GitHub keeps only one waiting run per group and cancels an
-  older waiting one, so the next tag is pushed only after the previous release run has
-  finished.
+  older waiting one, so a tag pushed while another release is running can be skipped.
+  One release at a time: the next tag is not proposed or pushed until the previous
+  release run has finished.
 - Event fields — branch name, tag name, PR title and body, commit message — are external
   input. A `run:` script never contains `${{ github.event.* }}`, `${{ github.head_ref }}`
   or a step output inline; it reads them from `env:`, quoted.
@@ -119,6 +121,11 @@ Every workflow starts with `permissions: {}`. Each job declares only what it use
   `toJSON(secrets)`. `ci.yml` references none: a pull request from a branch of the same
   repository would receive them.
 - A value derived from a secret is masked with `::add-mask::` before anything can print it.
+  Masking only keeps values out of logs; it does not stop code in the step from sending
+  them elsewhere.
+- A step that must run project tooling with a secret (§3) runs it from the run's frozen
+  install, and the code it runs reached `main` through review. Review is the protection
+  there, not masking.
 - A registry or host that accepts OIDC gets OIDC, not a stored token.
 - **Public repository:** every release secret is a secret of the `release` environment;
   repository secrets hold none. The release job waits for the owner's approval in GitHub,
@@ -153,15 +160,16 @@ Procedure: skill `ci-setup`.
 
 - Action SHAs (§4.4), the zizmor version and the Gitleaks version are pinned in the
   workflow files. Changing any of them is a dependency change.
-- `runs-on` names an image version label, never `*-latest`: the image under a release must
-  not change between two releases of the same code.
+- `runs-on` names an OS version label, never `*-latest`, so a release never moves to a new
+  OS version unannounced. GitHub still updates the image under a label; exact image
+  reproducibility needs a self-hosted runner, which §1 prohibits.
 
 ### 5.2 Build
 
 - `release.yml` builds from the tagged commit's checkout. Artifacts from `ci.yml` runs or
   earlier releases are never reused.
-- Each job that produces downloadable files also writes their SHA-256 in `sha256sum`
-  format; the publish job merges them into one `SHA256SUMS`.
+- Build jobs upload their files as artifacts of the run. The publish job, on Linux,
+  downloads them all and writes `SHA256SUMS` with `sha256sum`, one line per file.
 
 ### 5.3 Self-check
 
@@ -169,12 +177,17 @@ Run in `ci.yml` on every push and pull request, before the archetype's checks:
 
 - zizmor over `.github/`, failing on any finding. An ignore is an inline
   `# zizmor: ignore[<audit>]` with the reason on the same line.
-- Gitleaks over the full history (`fetch-depth: 0`). An allowlist entry in
-  `.gitleaks.toml` covers a path under `tests/` only, with its reason.
+- Gitleaks over the full history. An allowlist entry in `.gitleaks.toml` names one
+  fixture file under `tests/`, holds a value made up for the test, and states its reason;
+  a directory or pattern entry is PROHIBITED.
 
-`release.yml` starts, before anything is built, by failing unless the tag's commit is on
-`main` (`git merge-base --is-ancestor`), then runs zizmor and Gitleaks over the full
-history reachable from the tag. A result from an earlier `ci.yml` run is not reused.
+Both workflows check out with `fetch-depth: 0`, which brings every branch and tag; a
+shallow checkout makes "full history" a lie.
+
+`release.yml` starts, before anything is built, by failing unless the tag's commit is an
+ancestor of `origin/main` (`git merge-base --is-ancestor`), then runs zizmor and Gitleaks
+over the full history reachable from the tag. A result from an earlier `ci.yml` run is not
+reused.
 
 ### 5.4 Package
 
@@ -212,8 +225,9 @@ Workflows have no unit tests; the checks of §5.3 are their tests.
 - Before committing a workflow change, the agent runs `uvx zizmor==<version> .github/`
   locally.
 - `release.yml` runs only on a release. Its first run is the archetype's walking-skeleton
-  release. Every later change to it is named in the next version proposal, so the human
-  approves that release knowing the workflow changed.
+  release. It publishes nothing until every check and build has passed, so a broken change
+  fails before anything reaches users; the fix ships as the next patch version, never by
+  moving the tag. Every change to it is named in the next version proposal.
 
 ---
 
@@ -245,7 +259,7 @@ around a prohibition when something does not work.
 Any change under `.github/`:
 
 - [ ] zizmor passes with no new ignore, or each new ignore states its reason
-- [ ] Every new `uses:` is a full SHA resolved from the action's repository, with its tag
+- [ ] Every new external `uses:` is pinned as §4.4 says; local actions excepted
 - [ ] Every new permission is job-level and named in the report
 - [ ] No secret referenced outside a step's `env:` in `release.yml`
 
