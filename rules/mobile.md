@@ -247,8 +247,10 @@ Procedure: skill `expo-android-release`.
   the build never sees the upload key. On a developer machine the release variant stays
   debug-signed for `pnpm expo run:android --variant release`.
 - Signing is its own CI job on a fresh runner: it receives the unsigned files as artifacts,
-  `apksigner` signs the APK and `jarsigner` signs the AAB, both from the runner's Android
-  SDK and JDK, and it runs nothing else. A Gradle daemon from the build job could
+  `zipalign -c` confirms the APK is aligned, `apksigner` signs it and `jarsigner` signs
+  the AAB, all from the runner's Android SDK and JDK, and it runs nothing else. Alignment
+  is checked, not applied: Gradle aligns, and changing an APK after `apksigner` breaks
+  the signature. A Gradle daemon from the build job could
   otherwise read the keystore file once it is on disk.
 - `version` in `package.json` is the single source. `app.config.ts` reads it for `version`
   and computes `android.versionCode` as major × 10000 + minor × 100 + patch, with minor and
