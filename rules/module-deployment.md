@@ -75,9 +75,9 @@ them read-only with `gh api` before the first workflow lands; the human changes 
   `release.yml`. A third workflow needs an ADR naming why neither fits.
 - Inside `release.yml`, files are built in jobs that hold no secret and no write permission,
   and handed on as artifacts of the same run. The job that publishes them runs no project
-  code and installs nothing. Where the archetype rule names a step that must run project
-  tooling with a secret — the host deploy step, APK signing — that step is the only one
-  holding it.
+  code and installs nothing; signing is done the same way, in its own job. Where the
+  archetype rule names a deploy CLI that must run with a secret (web-static's wrangler),
+  that step is the only one holding it (§4.3).
 
 ---
 
@@ -85,17 +85,19 @@ them read-only with `gh api` before the first workflow lands; the human changes 
 
 ### 4.1 Triggers and untrusted input
 
-- `ci.yml`: `push` to `main`, `pull_request`. `release.yml`: `push` of tags `v*`, and
-  `workflow_dispatch`, with the human's approval, only to resume a release of an existing
-  tag that published nothing or left its GitHub Release a draft. What was published is
-  never rebuilt or republished.
+- `ci.yml`: `push` to `main`, `pull_request`. `release.yml`: `push` of tags `v*` only.
+  A failed release is resumed, with the human's approval, by re-running the failed jobs of
+  its own run, which keeps the tag's commit and workflow; only a release that published
+  nothing or left its GitHub Release a draft is resumed. What was published is never
+  rebuilt or republished.
 - `pull_request_target`, `workflow_run`, and any trigger fired by a comment are
   PROHIBITED: they run with the base repository's secrets and write token.
 - `release.yml` sets `concurrency: { group: release, cancel-in-progress: false }` — one
   fixed group for every tag. GitHub keeps only one waiting run per group and cancels an
   older waiting one, so a tag pushed while another release is running can be skipped.
   One release at a time: the next tag is not proposed or pushed until the previous
-  release run has finished.
+  release has succeeded, or the human has abandoned it — its draft deleted and the reason
+  in `known-issues.md`.
 - Event fields — branch name, tag name, PR title and body, commit message — are external
   input. A `run:` script never contains `${{ github.event.* }}`, `${{ github.head_ref }}`
   or a step output inline; it reads them from `env:`, quoted.
@@ -123,9 +125,12 @@ Every workflow starts with `permissions: {}`. Each job declares only what it use
 - A value derived from a secret is masked with `::add-mask::` before anything can print it.
   Masking only keeps values out of logs; it does not stop code in the step from sending
   them elsewhere.
-- A step that must run project tooling with a secret (§3) runs it from the run's frozen
-  install, and the code it runs reached `main` through review. Review is the protection
-  there, not masking.
+- A step holding a secret runs one named tool and nothing else: `gh`, `curl` for a deploy
+  hook, the signing tools, or the deploy CLI the archetype rule names (wrangler). That
+  CLI comes from `pnpm install --frozen-lockfile` in an earlier step of the same job,
+  which holds no secret, so install scripts never see it. The CLI and its own
+  dependencies still run with the token; the token's scope — one site, one account — is
+  what limits the damage.
 - A registry or host that accepts OIDC gets OIDC, not a stored token.
 - **Public repository:** every release secret is a secret of the `release` environment;
   repository secrets hold none. The release job waits for the owner's approval in GitHub,
@@ -206,8 +211,8 @@ For every archetype:
 - The agent proposes the next version from the Conventional Commits since the previous tag
   — a breaking change raises major (minor before 1.0.0), `feat` raises minor, anything
   else patch — together with the commit SHA and release notes grouped the same way. The
-  human approves that version and that commit. Before the tag is pushed,
-  `git rev-parse v<version>^{commit}` equals the approved SHA.
+  human approves that version and that commit. The tag is created locally first, and
+  `git rev-parse v<version>^{commit}` equals the approved SHA before it is pushed.
 
 ### 5.5 CI
 
@@ -228,6 +233,9 @@ Workflows have no unit tests; the checks of §5.3 are their tests.
   release. It publishes nothing until every check and build has passed, so a broken change
   fails before anything reaches users; the fix ships as the next patch version, never by
   moving the tag. Every change to it is named in the next version proposal.
+- What a run cannot show — a check removed, a secret's reach widened, a wrong deploy
+  target — is caught in the diff. A change under `.github/` is CI configuration, so the
+  independent reviewer of `GLOBAL_RULES.md` §5.3 checks it against this file.
 
 ---
 
