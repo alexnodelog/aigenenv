@@ -126,7 +126,9 @@ Every workflow starts with `permissions: {}`. Each job declares only what it use
   Masking only keeps values out of logs; it does not stop code in the step from sending
   them elsewhere.
 - A step holding a secret runs one named tool and nothing else: `gh`, `curl` for a deploy
-  hook, the signing tools, or the deploy CLI the archetype rule names (wrangler). That
+  hook, `base64 -d` writing a key file into `$RUNNER_TEMP`, the signing tools, or the
+  deploy CLI the archetype rule names (wrangler). A password reaches a tool as an
+  environment-variable reference, never as a command argument. That
   CLI comes from `pnpm install --frozen-lockfile` in an earlier step of the same job,
   which holds no secret, so install scripts never see it. The CLI and its own
   dependencies still run with the token; the token's scope — one site, one account — is
