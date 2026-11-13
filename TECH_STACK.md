@@ -688,10 +688,11 @@ no network at all.
 |---|---|---|---|
 | Archetype | `pc-app-python` | — | A local model inside a web archetype |
 | Model runtime | llama-cpp-python, in the app's own process | llama.cpp `llama-server`, started and stopped by the app, bound to 127.0.0.1, a new random API key per launch | A resident daemon (Ollama); a server bound to any address but 127.0.0.1; a runtime's built-in model download |
-| llama-cpp-python install | Built from the PyPI source distribution, hash in `uv.lock` | Prebuilt wheel from the project's own wheel index, declared as an explicit uv index | Any other third-party wheel or fork |
-| Model files | GGUF chosen by the user; path and SHA-256 in settings | — | Pickle-based weights (`.bin`, `.pt`, `.pth`, `.pkl`); `trust_remote_code`; a model name fixed in code |
+| llama-cpp-python install | Built from the PyPI source distribution, CPU, hash in `uv.lock` | A GPU build; a prebuilt wheel from the project's own wheel index, declared as an explicit uv index | Any other third-party wheel or fork |
+| Model files | GGUF chosen by the user; path and SHA-256 recorded in the app's database | — | Pickle-based weights (`.bin`, `.pt`, `.pth`, `.pkl`); `trust_remote_code`; a model name or path fixed in code |
 | Embeddings | A GGUF embedding model on the same runtime | — | A second runtime for embeddings only (sentence-transformers, PyTorch) |
-| Vector store | sqlite-vec inside the app's SQLite file, exact version pinned | — | A vector database server (Qdrant, Chroma, Milvus); vectors in a file separate from the documents they index (FAISS index files) |
+| Vector store | sqlite-vec inside the app's SQLite file, exact version pinned | — | A vector database server (Qdrant, Chroma, Milvus); sqlite-vss; vectors in a file separate from the documents they index (FAISS index files) |
+| Document parsing | One parser per file type the app reads, chosen by ADR in the first project that needs it: runs offline, locked in `uv.lock` | — | A parser that calls a service; OCR or conversion through a hosted API |
 | Ingestion / chunking | Project-owned code | — | A framework adopted for a single pipeline |
 | Orchestration | None | LangChain or LlamaIndex, with a recorded reason: core package plus local integrations only, every model, embedding and store default set explicitly in code | Their hosted-service integrations |
 
