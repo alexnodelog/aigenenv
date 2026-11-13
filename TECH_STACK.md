@@ -712,6 +712,42 @@ retrieval pipeline is usually under 200 lines of owned, readable code. Start wit
 
 Release artifacts MUST be produced by CI, never from a developer's machine.
 
+Applies to every project from its first GitHub Actions workflow, not only to projects that
+release: a workflow that only runs tests still executes third-party code with a token.
+
+| Category | Default | Alternative | Prohibited |
+|---|---|---|---|
+| Action references | Full commit SHA in `uses:`, the release tag as a trailing comment; repository policy "Require actions to be pinned to a full-length commit SHA" on | Workflow lockfile (`.github/workflows/actions.lock`, `gh actions-lock`) | Tags, branches, short SHAs |
+| Action updates | Dependabot, `github-actions` ecosystem, with a cooldown | — | Auto-merging update PRs |
+| Workflow check | zizmor, offline audits, pinned version | — | — |
+| Secret scan | Gitleaks CLI, tagged release binary, version and SHA-256 in `DECISIONS.md` | Betterleaks | gitleaks-action |
+| Release record | GitHub Release, immutable, drafted, assets and `SHA256SUMS` attached, then published | — | Assets added or replaced after publish |
+| Versioning | SemVer from Conventional Commits; the agent proposes the version, the human approves | — | semantic-release and any tool that tags or publishes on merge |
+
+**Why SHAs and not the lockfile.** Workflow lockfiles became generally available on all
+plans, Free included, on 28 October 2026, and they also pin the actions an action calls.
+They were two weeks old when this was written, and the `gh actions-lock` extension was at
+0.x. SHA pinning works everywhere today and the repository policy enforces it. Reconsider
+when the lockfile has a stable extension and a year of use.
+
+**Why Gitleaks with Betterleaks as the alternative.** Gitleaks' CLI is MIT, but
+gitleaks-action is not: since v2 it carries its own licence and needs a key for
+organization-owned repositories, so CI runs the CLI binary directly. In March 2026
+Gitleaks' original author said he no longer fully controls the project and started
+Betterleaks, which reads Gitleaks configuration unchanged and is actively developed but
+was planning a v2 with CLI and configuration changes. Gitleaks was chosen for stability;
+switching changes one CI step.
+
+**GitHub Free and private repositories.** Environments, environment secrets, deployment
+protection rules and rulesets are available only in public repositories on GitHub Free.
+In a private Free repository every secret is a repository secret, readable by any workflow
+any pusher writes; the deployment module's rule follows from that. Whether immutable
+releases are available in private Free repositories was not verified.
+
+**`pull_request_target`.** GitHub blocks it by default in public repositories from
+2 December 2026 because it runs with the base repository's secrets. It is prohibited here
+regardless of visibility.
+
 ---
 
 ## 8. Cross-Cutting Architecture Requirements
@@ -885,6 +921,8 @@ session on every host the plugin claims to support.
 | CUDA toolkit / GPU drivers | System — AI/RAG, optional | CPU inference works; GPU is a speed choice |
 | sentence-transformers, FAISS | Project dependencies | — |
 | Model provider API key | Account — AI/RAG, hosted models only | Usage-based cost. Never committed |
+| zizmor | CI only — Deployment | Run with `uvx zizmor==<version>`; the version is pinned in the workflow |
+| Gitleaks binary | CI only — Deployment | Tagged release, version and SHA-256 recorded in `DECISIONS.md` |
 
 ### 9.11 OS build toolchain summary
 
