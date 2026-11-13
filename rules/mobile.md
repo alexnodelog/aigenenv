@@ -52,7 +52,7 @@ iOS is deferred. Nothing here builds, tests or ships for iOS; starting iOS work 
 | Android Studio, Android SDK Platform 36, an emulator image | System. `ANDROID_HOME` set, `platform-tools` on `PATH` |
 | JDK 17 | System. `JAVA_HOME` set explicitly, not left to Android Studio's bundled JDK |
 | Maestro CLI | System. Needs Java 17+ |
-| Upload keystore | A file the project owns, outside the repository, backed up off the machine. CI receives it and its passwords as secrets |
+| Upload keystore | A file the project owns, outside the repository, backed up off the machine. CI receives it base64-encoded, and its passwords, as secrets. Its certificate's SHA-256 fingerprint is pinned in `release.yml` |
 | Google Play developer account | Account. Only at store release |
 
 The first `pnpm expo run:android` downloads Gradle's dependencies. After that the
@@ -246,12 +246,16 @@ Procedure: skill `expo-android-release`.
   when `CI` is set, the local config plugin removes that, so CI builds unsigned files and
   the build never sees the upload key. On a developer machine the release variant stays
   debug-signed for `pnpm expo run:android --variant release`.
-- Signing is its own CI job on a fresh runner: it receives the unsigned files as artifacts,
-  `zipalign -c` confirms the APK is aligned, `apksigner` signs it and `jarsigner` signs
-  the AAB, all from the runner's Android SDK and JDK, and it runs nothing else. Alignment
-  is checked, not applied: Gradle aligns, and changing an APK after `apksigner` breaks
-  the signature. A Gradle daemon from the build job could
-  otherwise read the keystore file once it is on disk.
+- Signing is its own CI job on a fresh runner, so no process from the build job is alive
+  to read the key. It downloads the unsigned files, writes the keystore with `base64 -d`
+  into `$RUNNER_TEMP`, checks the APK with `zipalign -c`, signs the APK with `apksigner`
+  and the AAB with `jarsigner`, verifies both (§5.3), deletes the keystore in a step that
+  runs even on failure, and uploads the signed files. It checks out no project code and
+  installs, builds and tests nothing. The tools come from the runner's Android SDK and
+  JDK. Passwords reach the tools as environment-variable references (`--ks-pass env:`,
+  `-storepass:env`), never as command arguments.
+- Alignment is checked, not applied: Gradle aligns, and changing an APK after `apksigner`
+  breaks its signature.
 - `version` in `package.json` is the single source. `app.config.ts` reads it for `version`
   and computes `android.versionCode` as major × 10000 + minor × 100 + patch, with minor and
   patch each at most 99. A release never lowers `versionCode`.
@@ -279,9 +283,12 @@ offline, and exits 0 — or non-zero naming the failure. It:
 
 Timeouts: `app-ready` within 30 s of launch, whole flow within 120 s. A timeout fails.
 
-Checks on the built APK, before the smoke flow:
+Checks on the signed files, before the smoke flow:
 
-- `debuggable` is false, and its signing certificate is the upload key's;
+- `apksigner verify --print-certs` passes on the APK, and `jarsigner -verify` on the AAB;
+  for both, the signing certificate's SHA-256 fingerprint equals the one pinned in
+  `release.yml`. A valid signature by another key fails;
+- `debuggable` is false in the APK;
 - the permissions in its manifest equal the list in `app.config.ts`;
 - it holds no `.env*` file and no source map, and the project's secret check passes over
   its unpacked contents as well as the tree;
@@ -313,13 +320,13 @@ Checks on the built APK, before the smoke flow:
 
 - Push / PR: one Linux job — `pnpm install --frozen-lockfile`, Biome, `tsc --noEmit`, Jest
   including the boundary check and the adapter tests, `pnpm expo install --check`.
-- Version tag: all of the above → `pnpm build` → the APK checks of §5.3 → every flow in
-  `maestro/flows/`, then the upgrade flow in `maestro/upgrade/` (§6), on an emulator →
+- Version tag: all of the above → `pnpm build`, unsigned → the signing job of §5.2 → the
+  checks of §5.3 → every flow in `maestro/flows/`, then the upgrade flow in
+  `maestro/upgrade/` (§6), on an emulator with the signed APK →
   GitHub Release with the APK and its checksum, and the AAB as a workflow artifact. The
   release is published only if every step passes.
-- Version tag order: `pnpm build` → the signing job of §5.2 → the APK checks of §5.3.
-  The keystore and its passwords are set only on the signing step of that job; no other
-  job or step can read them.
+- The encoded keystore is set only on the step that decodes it, and the passwords only on
+  the signing step; no other job or step can read them.
 
 ---
 
