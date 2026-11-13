@@ -63,7 +63,7 @@ modules** (what capabilities it has).
 
 | Module | File | Adds |
 |---|---|---|
-| AI / RAG | `rules/module-ai-rag.md` | LLM, embedding, vector search **at runtime** |
+| AI / RAG | `rules/module-ai-rag.md` | An open-source model run on the user's own PC, over the user's own files, with nothing leaving the machine |
 | Deployment | `rules/module-deployment.md` | Release automation, signing, distribution |
 
 **Agent Plugin against the others.** Pick it when the thing being built is installed into
@@ -679,27 +679,73 @@ trust this table's limits without checking.
 
 ### 7.1 AI / RAG Module
 
-Applies only when the shipped product calls a model at runtime.
+Applies when a `pc-app-python` product runs an open-source model on the user's own PC —
+chat, search, or an agent over the user's own files — and nothing it reads may leave the
+machine. Development happens on an online machine; the product runs on a PC that may have
+no network at all.
 
 | Category | Default | Alternative | Prohibited |
 |---|---|---|---|
-| Local LLM runtime | Ollama | llama.cpp | — |
-| Hosted LLM | Provider-agnostic, behind an adapter | — | Provider SDK types in business logic |
-| Embeddings | sentence-transformers (local) | Hosted embedding API behind an adapter | — |
-| Vector store | FAISS | sqlite-vec, pgvector, Qdrant | — |
+| Archetype | `pc-app-python` | — | A local model inside a web archetype |
+| Model runtime | llama-cpp-python, in the app's own process | llama.cpp `llama-server`, started and stopped by the app, bound to 127.0.0.1, a new random API key per launch | A resident daemon (Ollama); a server bound to any address but 127.0.0.1; a runtime's built-in model download |
+| llama-cpp-python install | Built from the PyPI source distribution, hash in `uv.lock` | Prebuilt wheel from the project's own wheel index, declared as an explicit uv index | Any other third-party wheel or fork |
+| Model files | GGUF chosen by the user; path and SHA-256 in settings | — | Pickle-based weights (`.bin`, `.pt`, `.pth`, `.pkl`); `trust_remote_code`; a model name fixed in code |
+| Embeddings | A GGUF embedding model on the same runtime | — | A second runtime for embeddings only (sentence-transformers, PyTorch) |
+| Vector store | sqlite-vec inside the app's SQLite file, exact version pinned | — | A vector database server (Qdrant, Chroma, Milvus); vectors in a file separate from the documents they index (FAISS index files) |
 | Ingestion / chunking | Project-owned code | — | A framework adopted for a single pipeline |
-| Orchestration | None by default | LangChain / LlamaIndex with a recorded reason | — |
+| Orchestration | None | LangChain or LlamaIndex, with a recorded reason: core package plus local integrations only, every model, embedding and store default set explicitly in code | Their hosted-service integrations |
 
-Four interfaces MUST exist and MUST be owned by the application, not imported from a
-vendor: `LLMProvider`, `EmbeddingProvider`, `VectorStore`, `Storage`. Swapping Ollama for a
-hosted API, or FAISS for pgvector, MUST touch only the adapter behind that interface.
+Four interfaces MUST exist and MUST be owned by the application:
 
-A project MAY ship exactly one implementation per interface. The rule requires the seam to
-exist, not that alternatives be built in advance.
+| Interface | Behind it | Job |
+|---|---|---|
+| `LLMProvider` | llama-cpp-python | Generate answers |
+| `EmbeddingProvider` | The same runtime | Turn text into vectors |
+| `VectorStore` | sqlite-vec | Store and search vectors |
+| `DocumentSource` | Folders the user has allowed | Read source documents; refuse any path outside the allowed folders |
 
-**On orchestration frameworks.** LangChain and LlamaIndex solve problems that appear at
-team scale and add a large, fast-moving dependency surface in exchange. A personal
-retrieval pipeline is usually under 200 lines of owned, readable code. Start without one.
+Swapping the in-process runtime for `llama-server` MUST touch only the adapter. One
+implementation per interface is enough. `DocumentSource` exists for two reasons that do
+not depend on swapping anything: tests feed it fixtures instead of real files, and every
+file read passes through the one place that enforces the allowed folders.
+
+A product that calls a hosted model is outside this module. The first project that needs
+one decides it by ADR and edits this section.
+
+**Why in-process.** No port is opened, so nothing else on the machine — or on a network the
+PC later joins — can reach the model. The package is locked in `uv.lock` with its hash
+like any other dependency. The costs: support for a new model architecture arrives only
+when the binding updates its bundled llama.cpp, and a crash in native code takes the app
+down with it.
+
+**Why built from source.** PyPI ships only a source distribution; prebuilt wheels come
+from a separate index. Building from PyPI keeps one package index and one trust anchor.
+The C compiler it needs is already a `pc-app-python` prerequisite (§9.11).
+
+**Why not Ollama.** It runs as a resident service with no authentication, keeps its own
+updater and model registry, and in 2026 had an unauthenticated memory-disclosure flaw
+(CVE-2026-7482) triggered through a crafted model file.
+
+**Why sqlite-vec.** Documents, vectors, and history sit in one file: one backup, and
+deleting a document deletes its vectors in the same transaction. A personal corpus does
+not need an approximate-nearest-neighbour index. The extension is pre-1.0, so its version
+is pinned exactly.
+
+**Why GGUF only.** Pickle-based weights run code when loaded. GGUF does not, but the
+loader that parses it has had memory-safety flaws, so the file's origin is the user's
+choice and its SHA-256 is checked before every load.
+
+**No data leaves the machine.** The product makes no network calls, and its tests run
+with sockets blocked so that a dependency reaching out fails the suite. Real user data
+never enters the development machine or the coding agent's context: development and
+tests use fixtures under `tests/` only.
+
+**On orchestration frameworks.** LangChain and LlamaIndex can run fully locally; their
+service integrations ship as separate packages. Two risks remain. Their examples and
+defaults point at hosted services, so one model or embedding setting left implicit turns
+into an outbound request instead of an error — the socket-blocked tests catch it. And
+they add a large, fast-moving dependency surface. A personal retrieval pipeline is usually
+under 200 lines of owned, readable code, so start without one.
 
 ### 7.2 Deployment Module
 
@@ -755,8 +801,8 @@ regardless of visibility.
 Business logic MUST NOT directly import or reference:
 
 - SQLite, PostgreSQL, D1, or any database driver
-- FAISS, Qdrant, pgvector, or any vector store client
-- OpenAI, Ollama, Gemini, or any model provider SDK
+- sqlite-vec, or any vector store or its client
+- llama-cpp-python, `llama-server`, or any model runtime or provider SDK
 - Any hosting or cloud provider SDK
 - Any web framework, GUI framework, or UI library
 
@@ -916,11 +962,9 @@ session on every host the plugin claims to support.
 
 | Requirement | Scope | Note |
 |---|---|---|
-| Ollama | System — AI/RAG, local models | — |
-| Model weights | Disk — AI/RAG | Multi-gigabyte downloads. Budget disk space and first-run time |
-| CUDA toolkit / GPU drivers | System — AI/RAG, optional | CPU inference works; GPU is a speed choice |
-| sentence-transformers, FAISS | Project dependencies | — |
-| Model provider API key | Account — AI/RAG, hosted models only | Usage-based cost. Never committed |
+| Model files (GGUF) | Disk — AI/RAG | Multi-gigabyte. Downloaded on the online machine, carried to the offline PC, SHA-256 checked there |
+| CUDA toolkit / GPU drivers | System — AI/RAG, optional | CPU inference works; GPU is a speed choice. A GPU build of llama-cpp-python needs the matching toolkit at build time |
+| llama-cpp-python, sqlite-vec | Project dependencies | Locked in `uv.lock` |
 | zizmor | CI only — Deployment | Run with `uvx zizmor==<version>`; the version is pinned in the workflow |
 | Gitleaks binary | CI only — Deployment | Tagged release, version and SHA-256 recorded in `DECISIONS.md` |
 
@@ -947,7 +991,6 @@ you. Everything else in this document installs through uv, pnpm, or a project de
 | Google Play developer account | One-time fee | Publishing an Android app to the store |
 | Apple Developer membership | Yearly | Publishing an iOS app — deferred |
 | Windows / macOS code signing certificate | Yearly, optional | Distributing desktop builds without OS warnings |
-| Hosted model API usage | Per-use | AI/RAG module with hosted models instead of Ollama |
 | Oracle Cloud Always Free | Free, card required for identity verification | Replacing a sleeping free-tier backend with an always-on one |
 
 Nothing else in this stack requires payment at any stage, including the final deployed
@@ -969,7 +1012,7 @@ that. On a restricted or filtered network, the column that matters is the middle
 | `web-api` | Network | **Fully offline** | Network |
 | `mobile` | Network, including Gradle's first dependency fetch | **Offline once the Gradle cache is warm** | Android: CI. iOS: network, deferred |
 | `agent-plugin` | Network | **Fully offline** for the executable's own tests and the Inspector; **network to test the bundle**, since the host's model is a cloud service | Network |
-| AI/RAG module | Network for model download | **Fully offline with Ollama** | — |
+| AI/RAG module | Network on the development machine: packages and model files | **Fully offline** | Installer and model files carried to the offline PC; SHA-256 checked there |
 
 Two rules follow from this table.
 
