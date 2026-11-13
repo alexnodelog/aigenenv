@@ -24,7 +24,7 @@ iOS is deferred. Nothing here builds, tests or ships for iOS; starting iOS work 
 | Packaging | pnpm, standalone install, exact version in `package.json` `packageManager`; `pnpm-lock.yaml`; `nodeLinker: isolated` (pnpm's default) | `nodeLinker: hoisted`, with the ADR naming the library that failed under `isolated` | npm, yarn, bun; Corepack; `npx` in scripts or docs; `enableGlobalVirtualStore` — Metro cannot resolve packages stored outside the project |
 | Language | TypeScript, `strict: true` | — | Plain JavaScript in app or test code (a tool's config file MAY be `.js` when the tool requires it) |
 | Framework | Expo SDK 58 (React Native 0.88), Continuous Native Generation: `android/` and `ios/` are generated and gitignored | — | Bare React Native; committed native directories |
-| Native configuration | `app.config.ts` and config plugins, `expo-build-properties` for Gradle settings; a local config plugin in `plugins/` for what those cannot express, such as release signing | — | Editing anything under `android/` |
+| Native configuration | `app.config.ts` and config plugins, `expo-build-properties` for Gradle settings; a local config plugin in `plugins/` for what those cannot express, such as an unsigned release build in CI | — | Editing anything under `android/` |
 | CLI | Expo CLI from the `expo` package, run as `pnpm expo` | EAS CLI, only with an EAS Alternative below, run as `pnpm dlx eas-cli@<exact version>` | `eas-cli` as a project dependency; a global install of either |
 | Navigation | Expo Router, routes in `src/app/` | React Navigation | — |
 | State | None — `useState`, `useReducer` | Zustand, for state shared by distant screens | Redux, Redux Toolkit |
@@ -35,7 +35,7 @@ iOS is deferred. Nothing here builds, tests or ships for iOS; starting iOS work 
 | Type check | `tsc --noEmit` | — | Treating a running Metro bundle as a type check |
 | Tests | Jest via `jest-expo`, `@testing-library/react-native`; Maestro on an Android emulator | — | `react-test-renderer`; Detox, Appium |
 | Development build | `pnpm expo run:android` with `expo-dev-client`, on the emulator or a USB device | EAS cloud build | Expo Go as the only test path |
-| Release build | GitHub Actions: `expo prebuild` + Gradle, signed with the upload key from CI secrets | EAS cloud build — personal non-commercial projects only | A release built on a developer machine; `eas build --local` on Windows |
+| Release build | GitHub Actions: `expo prebuild` + Gradle, unsigned; then a separate job signs with `apksigner` (APK) and `jarsigner` (AAB) and the upload key from CI secrets | EAS cloud build — personal non-commercial projects only | A release built on a developer machine; `eas build --local` on Windows; the upload key inside the Gradle build |
 | OTA updates | None | EAS Update — personal non-commercial projects only | Shipping a native change as an OTA update |
 | Third-party runtime services | None: no analytics, crash-reporting or advertising SDK | One error-reporting service, by ADR (§4.4) | Tracking SDKs |
 
@@ -73,7 +73,7 @@ after the cause of a build error is identified, never the first try.
 ├── biome.json
 ├── jest.config.ts        projects: core in node, ui in jest-expo
 ├── .env.example
-├── plugins/              local config plugins: release signing, and what app.config.ts cannot express
+├── plugins/              local config plugins: unsigned release build in CI, and what app.config.ts cannot express
 ├── src/
 │   ├── app/              Expo Router routes only: _layout.tsx, one file per screen
 │   ├── components/       components and hooks shared by routes
@@ -242,8 +242,14 @@ Procedure: skill `expo-android-release`.
 ### 5.2 Build
 
 - `pnpm build` runs `tsc --noEmit`, then `expo prebuild --clean`, then the Gradle release
-  tasks for an APK and an AAB. It needs the upload key, so it runs in CI; on a developer
-  machine a release-variant check is `pnpm expo run:android --variant release`.
+  tasks for an APK and an AAB. The generated release build type signs with the debug key;
+  when `CI` is set, the local config plugin removes that, so CI builds unsigned files and
+  the build never sees the upload key. On a developer machine the release variant stays
+  debug-signed for `pnpm expo run:android --variant release`.
+- Signing is its own CI job on a fresh runner: it receives the unsigned files as artifacts,
+  `apksigner` signs the APK and `jarsigner` signs the AAB, both from the runner's Android
+  SDK and JDK, and it runs nothing else. A Gradle daemon from the build job could
+  otherwise read the keystore file once it is on disk.
 - `version` in `package.json` is the single source. `app.config.ts` reads it for `version`
   and computes `android.versionCode` as major × 10000 + minor × 100 + patch, with minor and
   patch each at most 99. A release never lowers `versionCode`.
@@ -309,8 +315,9 @@ Checks on the built APK, before the smoke flow:
   `maestro/flows/`, then the upgrade flow in `maestro/upgrade/` (§6), on an emulator →
   GitHub Release with the APK and its checksum, and the AAB as a workflow artifact. The
   release is published only if every step passes.
-- The keystore and its passwords are set only on the signing step; no other job or step
-  can read them.
+- Version tag order: `pnpm build` → the signing job of §5.2 → the APK checks of §5.3.
+  The keystore and its passwords are set only on the signing step of that job; no other
+  job or step can read them.
 
 ---
 
@@ -363,6 +370,9 @@ around a prohibition when something does not work.
    version of a native library. The SDK's version is the supported one.
 5. A release-only crash "fixed" by turning off R8 or by a keep rule covering every class
    (`-keep class ** { *; }`).
+6. Signing inside Gradle — a `signingConfigs.release` reading the keystore and passwords
+   from environment variables — as React Native and older Expo guides show. Every
+   dependency the build runs could then read the key.
 
 ---
 
