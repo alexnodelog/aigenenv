@@ -163,7 +163,7 @@ markers = [
 missing. Autouse, so no model test can skip it by not requesting it; a fixture, not a
 module-level check, so the default run, which deselects these tests, does not fail on
 collection. The human runs them with `uv run pytest -m model -rs tests/model/` and copies
-the summary line into the release proposal.
+the summary line into the release task's report.
 
 Tests for §3, with `sqlite_vec.load` replaced by a function that raises
 `sqlite3.OperationalError`: a connection still opens, `SELECT 1` works, `VecStatus.error`

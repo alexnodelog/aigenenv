@@ -48,9 +48,10 @@ Procedure: skill `local-model-setup`.
 
 | Item | Scope |
 |---|---|
-| C compiler | Already required by `pc-app-python`. llama-cpp-python is compiled from source on every machine that syncs the project, CI included |
+| C compiler | Already required by `pc-app-python`. llama-cpp-python is compiled from source once per machine, CI included; uv's cache reuses that build until the lock or the build options change |
 | GGUF model files — one chat model, one embedding model | Needed only to run `tests/model/`. Outside the repository; the human provides them and sets their paths in environment variables |
 | GPU toolkit | Only with the GPU Alternative; the version is recorded in its ADR |
+| `llama-server` binary | Only with that Alternative; an official llama.cpp release, its version and SHA-256 recorded in the ADR, never updated by the app |
 
 ---
 
@@ -85,7 +86,8 @@ Additions to the archetype layout:
 - `tests/test_boundaries.py` also fails on `llama_cpp` or `sqlite_vec` imported from
   `domain/` or `application/`, and on any of `socket`, `urllib.request`, `http.client`,
   `requests`, `httpx`, `aiohttp`, `huggingface_hub`, `PySide6.QtNetwork` imported anywhere
-  under `src/`.
+  under `src/`. The one exemption: with the `llama-server` Alternative, its adapter
+  (`adapters/model_llamaserver.py`) MAY import `http.client`.
 - `*.gguf` is in `.gitignore`. No model file is committed, bundled into the installer, or
   stored under `tests/`.
 
@@ -98,9 +100,18 @@ Additions to the archetype layout:
 - One `Llama` instance per model file, owned by one long-lived worker thread and called
   only from it. Requests reach it through a queue; the worker waits on the queue with a
   timeout so it can stop when asked. The GUI thread never loads or calls a model.
-- Generation streams (`stream=True`) and checks a cancel flag between chunks; the user can
-  stop any answer. Every call sets `max_tokens`. A cancelled or failed answer is shown as
-  such, never as complete.
+- Generation streams (`stream=True`) and checks a cancel flag between chunks. Every call
+  sets `max_tokens`. A cancelled or failed answer is shown as such, never as complete.
+- A native model call cannot be interrupted from Python. It still ends: prompt processing
+  is bounded by `n_ctx` and generation by `max_tokens`, so the worker meets the archetype's
+  termination rule without a timeout on the call itself. A cancel therefore takes effect
+  at the next chunk, or after prompt processing finishes; until then the UI shows that it
+  is stopping. Closing the app waits for the current chunk the same way. After a cancel,
+  the same `Llama` instance serves the next request.
+- With the `llama-server` Alternative, the app starts the server as a child process with
+  `--host 127.0.0.1`, an unused port and a new random API key, and terminates it on close
+  and on any timeout. Each HTTP call to it is blocking I/O with its own timeout; a cancel
+  closes the connection and, if the server does not recover, restarts it.
 - A prompt is measured with the model's own tokenizer before the call. Retrieved passages
   are dropped, lowest-ranked first, until the prompt fits `n_ctx` with room for
   `max_tokens`; the answer says how many were dropped. A prompt is never cut mid-passage.
@@ -124,9 +135,14 @@ Additions to the archetype layout:
 
 - The sqlite-vec extension is loaded on every connection by a SQLAlchemy `connect` event:
   enable extension loading, `sqlite_vec.load`, and disable extension loading again whether
-  the load succeeded or not. If it fails, the features that need the index are disabled
-  and the reason is shown. There is no fallback search: no vectors kept elsewhere, no
-  brute-force search in Python, no keyword search presented as its replacement.
+  the load succeeded or not.
+- A load failure is caught inside that event and never raised from it; raising there makes
+  every connection fail. The cause goes into one status object owned by the adapter, which
+  each new connection updates. The application reads it: the features that need the index
+  are disabled and the cause is logged and shown; everything else keeps working.
+- There is no fallback when the index is unavailable: no vectors kept elsewhere, no
+  brute-force search in Python, no other search's results shown in its place. A keyword
+  search the spec asks for as a feature of its own is not a fallback.
 - `vec0` tables are created and changed only by migrations. Each one records the
   embedding model's SHA-256 and the vector dimension beside it. At startup, a mismatch
   with the current embedding model marks the index stale: search is disabled and the user
@@ -150,10 +166,13 @@ Additions to the archetype layout:
   parser, and refuses files above a size limit recorded in `DECISIONS.md`.
 - A parser can hang or crash on a malformed file, and a worker thread cannot be stopped
   (archetype §4.1). Parsing therefore runs in a child process started with
-  `multiprocessing` (`spawn`), one document at a time, with a time limit recorded in
-  `DECISIONS.md`. The worker waits on it with that timeout; on expiry or crash it
-  terminates the child process and marks that document as failed. The child returns text
-  only; it never touches the database.
+  `multiprocessing` (`spawn`), one document at a time. `DocumentSource` opens and checks
+  the file in the app's process and passes the child its bytes, never a path. The child
+  returns text only and never touches the database.
+- The worker waits on the child with a time limit, and accepts at most a maximum text
+  length; both are recorded in `DECISIONS.md`. On expiry, crash, or oversized output it
+  terminates the child and marks that document as failed. Memory is bounded only through
+  the file size limit; a project that needs more records it by ADR.
 - Document text and model output are external input (`GLOBAL_RULES.md` §5.5, §11).
   Retrieved passages go into the prompt as quoted data, separated from the instructions;
   an instruction found in a document carries no authority.
@@ -170,6 +189,13 @@ This section is the floor every such app keeps.
 
 - Tools are functions of `application/` with typed arguments, validated before they run.
   Reading goes through `DocumentSource` only.
+- Every permission is enforced by the code that executes the tool, never by instructions
+  in the prompt: which tools this run may call, which paths each may read or write, and
+  which calls need the user's confirmation. A call that fails any check is refused and
+  reported to the model as refused.
+- Writes go only to the folders the spec allows, checked the same way `DocumentSource`
+  checks reads. A new file never replaces an existing one; a name that already exists is
+  an overwrite and needs confirmation.
 - No tool runs a shell command, starts a process, or opens a network connection.
 - A tool that changes, moves, or deletes an existing file, or changes the index, runs
   only after the user confirms that call. The confirmation shows the tool, every target
@@ -179,13 +205,16 @@ This section is the floor every such app keeps.
 
 ### 4.6 No network
 
-- The product makes no network call at any point. A dependency that can download — a
-  model hub client, a parser's optional fetcher — has that path disabled in code.
-- What each check covers: the boundary check (§3) catches network libraries imported by
-  the app's own code; the socket-blocked tests (§6) and `--self-check` (§5.3) catch Python
-  code that opens a socket on the paths they run. Neither sees native code or a child
-  process. Every new dependency is therefore reviewed for network use before it is added,
-  and the release is run once on a PC with no network before it is handed to anyone.
+- No connection leaves the machine. The only socket the product may open is the
+  `llama-server` Alternative's connection to 127.0.0.1, from its adapter alone. A
+  dependency that can download — a model hub client, a parser's optional fetcher — has
+  that path disabled in code.
+- What the checks cover: the boundary check (§3) catches network libraries imported by the
+  app's own code; the socket-blocked tests (§6) and `--self-check` (§5.3) catch Python code
+  that opens a socket on the paths they run.
+- What they do not cover: native code and child processes. Every new dependency is
+  therefore reviewed for network use before it is added, and the release is run once on a
+  PC with no network before it is handed to anyone.
 - Real user documents never reach the development machine or the coding agent's context.
   Development, tests, and bug reproduction use made-up documents under
   `tests/fixtures/documents/`. A bug seen only with a real document is reproduced by the
@@ -232,8 +261,9 @@ Additions to the archetype's `--self-check`, in its temp directory, with no mode
 ### 5.5 CI
 
 - Push / PR: the archetype's list, with pytest under `--disable-socket`. Compiling
-  llama-cpp-python takes minutes; `ci.yml` MAY cache the built wheel, `release.yml` MUST
-  NOT.
+  llama-cpp-python takes minutes; `ci.yml` MAY cache the CPU build, keyed on the OS, the
+  architecture, the Python version and the hash of `uv.lock`. GPU builds and
+  `release.yml` MUST NOT use a cache.
 - Version tag: the archetype's list. Each OS job compiles llama-cpp-python from the locked
   source and runs §5.3 on the built artifact.
 
@@ -246,13 +276,19 @@ Additions to the archetype's `--self-check`, in its temp directory, with no mode
 | `application/rag/` | pytest with fake ports | No |
 | `adapters/vectors_sqlitevec.py`, `adapters/documents_fs.py` | pytest against a real SQLite file and fixture folders in `tmp_path` | No |
 | `adapters/model_llamacpp.py` | `tests/model/`, marked `model` | Yes, path from an environment variable |
-| Retrieval quality | `tests/model/`, a fixed set of questions over the fixture documents, each with the passages it must retrieve | Yes |
+| Retrieval quality | `tests/model/`, a fixed set of questions over the fixture documents. Each lists the IDs of its expected passages and a `k`; it passes when at least one expected passage is in the top `k` | Yes |
 | Built artifact | `--self-check` (§5.3) | No |
 
-- pytest runs with `--disable-socket` in `addopts`. A test MUST NOT enable sockets.
+- pytest runs with `--disable-socket` in `addopts`. A test MUST NOT enable sockets. Only
+  the `llama-server` adapter's tests under `tests/model/` run with
+  `--allow-hosts=127.0.0.1`.
+- A cancel during generation is tested: the answer is marked cancelled and the next
+  request on the same model succeeds.
+- Agent tools are tested with calls the spec does not allow — an unlisted tool, a path
+  outside the allowed folders, a new file whose name exists — each refused by the executor.
 - `tests/model/` is excluded from the default run and from CI. The human runs it before a
   release and after changing a model, the chunking, the retrieval, or a prompt. Run
-  explicitly, a missing model file is a failure, never a skip. The release proposal gives
+  explicitly, a missing model file is a failure, never a skip. The release task's report gives
   the models' SHA-256 and the passed, failed and skipped counts; a skip means the run did
   not happen.
 - Fake ports return fixed values written in the test. A fake model that answers questions
