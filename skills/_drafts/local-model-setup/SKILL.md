@@ -1,12 +1,13 @@
 ---
 name: local-model-setup
-description: Add llama-cpp-python and sqlite-vec to a pc-app-python project, pin their build dependencies, record and check model files, carry the app and models to an offline PC, extend --self-check and the test setup. Use when adding the AI/RAG module to a project, changing a model file, upgrading llama-cpp-python or sqlite-vec, switching to a GPU build, or preparing an offline install.
+description: Add llama-cpp-python and sqlite-vec to a pc-app-python project, pin their build dependencies, load sqlite-vec on each connection, extend --self-check, the test setup and CI. Use when adding the AI/RAG module to a project, upgrading llama-cpp-python or sqlite-vec, switching to a GPU build, or editing pyproject.toml's build constraints, tests/model/conftest.py or the self-check.
 ---
 
 # local-model-setup (draft)
 
 Procedures for `rules/module-ai-rag.md`. The rules they serve stay in that file (§2, §4,
-§5). This draft leaves `_drafts/` only when the Unverified list at the end is empty.
+§5). Downloading model files and installing on an offline PC are the
+human's work and belong in the manual, not here. This draft leaves `_drafts/` only when the Unverified list at the end is empty.
 
 Verified 2026-11-13 on Linux x86_64, uv 0.11.32, uv-managed CPython 3.12.13:
 llama-cpp-python 0.3.36 built from the PyPI source distribution; sqlite-vec 0.1.9 loaded,
@@ -43,7 +44,7 @@ inserted, deleted and searched; pytest-socket 0.8.1 installed.
 ## 2. GPU build (rule §1 Alternative, ADR first)
 
 Set `CMAKE_ARGS` before syncing — `-DGGML_CUDA=on` (NVIDIA), `-DGGML_METAL=on` (macOS),
-`-DGGML_VULKAN=on` — then clean-build as in §1.5. Record the toolkit version and the OSes
+`-DGGML_VULKAN=on` — then clean-build as in §1, step 5. Record the toolkit version and the OSes
 covered in the ADR.
 
 ## 3. Load sqlite-vec on every connection (rule §4.3)
@@ -57,12 +58,15 @@ from sqlalchemy import event
 @event.listens_for(engine, "connect")
 def _load_vec(dbapi_conn, _record):
     dbapi_conn.enable_load_extension(True)
-    sqlite_vec.load(dbapi_conn)
-    dbapi_conn.enable_load_extension(False)
+    try:
+        sqlite_vec.load(dbapi_conn)
+    finally:
+        dbapi_conn.enable_load_extension(False)
 ```
 
-An `AttributeError` on `enable_load_extension` means this Python's `sqlite3` cannot load
-extensions: stop and report it, per the rule.
+`AttributeError` (no `enable_load_extension`) or `sqlite3.OperationalError` (loading not
+authorised or the file not loadable) means this Python cannot use sqlite-vec: report it,
+per the rule. Extension loading is switched off again on every path.
 
 A `vec0` table is created by a migration:
 
@@ -80,26 +84,7 @@ SELECT chunk_id, distance FROM chunk_vectors
 WHERE embedding MATCH :query AND k = :k
 ```
 
-## 4. Record a model file (rule §4.2)
-
-On the online machine:
-
-1. Download the GGUF file from the source the user chose, by browser or the source's own
-   page. Not through the app.
-2. Compute its hash — Linux `sha256sum <file>`, macOS `shasum -a 256 <file>`, Windows
-   `Get-FileHash -Algorithm SHA256 <file>` — and compare it with the hash the source
-   publishes. Write both, the file name and the source URL in the carry list (§5).
-
-## 5. Carry to the offline PC (rule §2, §5.4)
-
-1. Copy the installer, its `SHA256SUMS`, the model files and the carry list to the
-   removable medium.
-2. On the offline PC, check every file with the same commands as §4.2. Any mismatch: stop,
-   do not install.
-3. Install the app, then choose each model file in the app; confirm the hash the app shows
-   against the carry list.
-
-## 6. Self-check additions (rule §5.3)
+## 4. Self-check additions (rule §5.3)
 
 Inside the archetype's `--self-check`, before the window opens:
 
@@ -117,7 +102,7 @@ Then: `import llama_cpp` and print `llama_cpp.__version__`; open the temp databa
 the normal `Engine` (which loads sqlite-vec), print `vec_version()`, create a `vec0` table
 with dimension 3, insert one vector, search for it, and fail if it is not returned.
 
-## 7. Test setup (rule §6)
+## 5. Test setup (rule §6)
 
 `pyproject.toml`:
 
@@ -127,11 +112,14 @@ addopts = "--disable-socket -m 'not model'"
 markers = ["model: needs a real model file; run by the human"]
 ```
 
-`tests/model/conftest.py` skips every test when `APP_TEST_CHAT_MODEL` or
-`APP_TEST_EMBED_MODEL` is unset. The human runs them with
-`uv run pytest -m model tests/model/`.
+`tests/model/conftest.py` provides the model paths through a session fixture that calls
+`pytest.fail` when `APP_TEST_CHAT_MODEL` or `APP_TEST_EMBED_MODEL` is unset or the file is
+missing. A fixture, not a module-level check: the default run deselects these tests and
+must not fail on collection. The human runs them with
+`uv run pytest -m model -rs tests/model/` and copies the summary line into the release
+proposal.
 
-## 8. CI (rule §5.5)
+## 6. CI (rule §5.5)
 
 `ci.yml` may cache the built llama-cpp-python wheel through the uv cache keyed on
 `uv.lock`; `release.yml` restores no cache and compiles in every OS job.

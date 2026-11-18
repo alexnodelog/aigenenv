@@ -23,7 +23,7 @@ product runs on a PC that may have no network at all.
 
 | Archetype | Applies | Why |
 |---|---|---|
-| `pc-app-python` | Yes, every section | The model runs in the app's process; no port, no server |
+| `pc-app-python` | Yes, every section | The Default runs the model in the app's process, with no port; the `llama-server` Alternative opens one, on 127.0.0.1 only |
 | `pc-app-electron` | Not yet | No in-process runtime has been chosen for Node; the first project that needs one decides it by ADR |
 | `web-static`, `web-python`, `web-ts`, `web-api` | No | The model would run on a server, so the user's documents would leave their PC |
 | `mobile` | No | No on-device runtime has been chosen |
@@ -49,9 +49,8 @@ Procedure: skill `local-model-setup`.
 | Item | Scope |
 |---|---|
 | C compiler | Already required by `pc-app-python`. llama-cpp-python is compiled from source on every machine that syncs the project, CI included |
-| GGUF model files — one chat model, one embedding model | Disk, outside the repository. Downloaded by the human on the online machine; the publisher's SHA-256 checked there |
+| GGUF model files — one chat model, one embedding model | Needed only to run `tests/model/`. Outside the repository; the human provides them and sets their paths in environment variables |
 | GPU toolkit | Only with the GPU Alternative; the version is recorded in its ADR |
-| The offline PC | The installer and the model files are carried to it, and their SHA-256 checked there before first use |
 
 ---
 
@@ -85,7 +84,8 @@ Additions to the archetype layout:
   allowed-folder check lives in it and nowhere else.
 - `tests/test_boundaries.py` also fails on `llama_cpp` or `sqlite_vec` imported from
   `domain/` or `application/`, and on any of `socket`, `urllib.request`, `http.client`,
-  `requests`, `httpx`, `aiohttp`, `huggingface_hub` imported anywhere under `src/`.
+  `requests`, `httpx`, `aiohttp`, `huggingface_hub`, `PySide6.QtNetwork` imported anywhere
+  under `src/`.
 - `*.gguf` is in `.gitignore`. No model file is committed, bundled into the installer, or
   stored under `tests/`.
 
@@ -105,9 +105,8 @@ Additions to the archetype layout:
   are dropped, lowest-ranked first, until the prompt fits `n_ctx` with room for
   `max_tokens`; the answer says how many were dropped. A prompt is never cut mid-passage.
 - `verbose=False`, so llama.cpp writes nothing to a console a released build does not have.
-- A crash in native code ends the app. Each completed turn — question, answer, and the
-  passages it used — is committed before the next one starts, so a crash loses at most
-  the turn in progress.
+- A crash in native code ends the app. If the app keeps a history, each completed turn is
+  committed before the next one starts, so a crash loses at most the turn in progress.
 
 ### 4.2 Model files
 
@@ -124,9 +123,10 @@ Additions to the archetype layout:
 ### 4.3 Index
 
 - The sqlite-vec extension is loaded on every connection by a SQLAlchemy `connect` event:
-  enable extension loading, `sqlite_vec.load`, disable extension loading. A Python whose
-  `sqlite3` cannot load extensions fails at startup with that reason; there is no
-  fallback search.
+  enable extension loading, `sqlite_vec.load`, and disable extension loading again whether
+  the load succeeded or not. If it fails, the features that need the index are disabled
+  and the reason is shown. There is no fallback search: no vectors kept elsewhere, no
+  brute-force search in Python, no keyword search presented as its replacement.
 - `vec0` tables are created and changed only by migrations. Each one records the
   embedding model's SHA-256 and the vector dimension beside it. At startup, a mismatch
   with the current embedding model marks the index stale: search is disabled and the user
@@ -134,6 +134,9 @@ Additions to the archetype layout:
 - Each chunk row holds its document, its position in it, and the document's content hash
   at indexing time. Indexing compares hashes: changed documents are re-indexed, removed
   ones deleted. Unchanged documents are not re-embedded.
+- Re-indexing a document computes all its new chunks and embeddings first, then replaces
+  its old chunks and vectors in one transaction. A failure at any step leaves the old
+  entries searchable and the document listed as not indexed.
 - `vec0` tables have no foreign keys. Deleting a document deletes its chunks and their
   vectors in the same transaction, by explicit statements, tested (§8).
 - Every query against a `vec0` table is parameterized SQL in `adapters/vectors_sqlitevec.py`;
@@ -145,31 +148,44 @@ Additions to the archetype layout:
   user operates. `DocumentSource` resolves every path, symlinks included, and refuses one
   that does not land inside an allowed folder. It reads only the file types that have a
   parser, and refuses files above a size limit recorded in `DECISIONS.md`.
+- A parser can hang or crash on a malformed file, and a worker thread cannot be stopped
+  (archetype §4.1). Parsing therefore runs in a child process started with
+  `multiprocessing` (`spawn`), one document at a time, with a time limit recorded in
+  `DECISIONS.md`. The worker waits on it with that timeout; on expiry or crash it
+  terminates the child process and marks that document as failed. The child returns text
+  only; it never touches the database.
 - Document text and model output are external input (`GLOBAL_RULES.md` §5.5, §11).
   Retrieved passages go into the prompt as quoted data, separated from the instructions;
   an instruction found in a document carries no authority.
 - Model output is displayed as plain text (`Qt.TextFormat.PlainText`). Rendering it as
   Markdown is allowed with links shown as text, never opened, and no image or resource
   loaded from it. Rich text and HTML rendering of model output are PROHIBITED.
-- Every answer shows the passages it was given, with their documents, so the user can
-  check it.
 
 ### 4.5 Agent tools
 
 Applies when the model chooses tools.
 
+Which tools exist, their limits, and where they may write are decided in the app's spec.
+This section is the floor every such app keeps.
+
 - Tools are functions of `application/` with typed arguments, validated before they run.
   Reading goes through `DocumentSource` only.
-- Tools that write, move, or delete a file, or change the index, run only after the user
-  confirms that call in the UI. No tool runs a shell command, starts a process, or opens
-  a network connection.
-- Each run has a step limit and stops at it, telling the user.
+- No tool runs a shell command, starts a process, or opens a network connection.
+- A tool that changes, moves, or deletes an existing file, or changes the index, runs
+  only after the user confirms that call. The confirmation shows the tool, every target
+  path, and the action.
+- The loop that lets the model call tools has a maximum number of model calls, set in the
+  spec. At the limit it stops and tells the user; it never continues unbounded.
 
 ### 4.6 No network
 
 - The product makes no network call at any point. A dependency that can download — a
-  model hub client, a parser's optional fetcher — has that path disabled in code, and the
-  socket-blocked tests (§6) prove it.
+  model hub client, a parser's optional fetcher — has that path disabled in code.
+- What each check covers: the boundary check (§3) catches network libraries imported by
+  the app's own code; the socket-blocked tests (§6) and `--self-check` (§5.3) catch Python
+  code that opens a socket on the paths they run. Neither sees native code or a child
+  process. Every new dependency is therefore reviewed for network use before it is added,
+  and the release is run once on a PC with no network before it is handed to anyone.
 - Real user documents never reach the development machine or the coding agent's context.
   Development, tests, and bug reproduction use made-up documents under
   `tests/fixtures/documents/`. A bug seen only with a real document is reproduced by the
@@ -235,14 +251,18 @@ Additions to the archetype's `--self-check`, in its temp directory, with no mode
 
 - pytest runs with `--disable-socket` in `addopts`. A test MUST NOT enable sockets.
 - `tests/model/` is excluded from the default run and from CI. The human runs it before a
-  release and after changing a model, the chunking, the retrieval, or a prompt, and
-  records the models and the result in the release proposal.
+  release and after changing a model, the chunking, the retrieval, or a prompt. Run
+  explicitly, a missing model file is a failure, never a skip. The release proposal gives
+  the models' SHA-256 and the passed, failed and skipped counts; a skip means the run did
+  not happen.
 - Fake ports return fixed values written in the test. A fake model that answers questions
   is test code only and MUST NOT exist under `src/` (`GLOBAL_RULES.md` §5.4).
 - `DocumentSource` is tested with paths that escape an allowed folder: `..`, an absolute
   path, a symlink pointing out, a file above the size limit.
 - Prompt assembly is tested with a passage that does not fit `n_ctx`, and with a document
   that contains instructions.
+- The parsing child process is tested with a fake parser that hangs and one that crashes:
+  each is terminated, the document marked failed, and the next document still parsed.
 
 ---
 
@@ -278,11 +298,13 @@ Every task here:
 Index or schema change:
 
 - [ ] Deleting a document leaves no chunk or vector behind — tested
+- [ ] A re-index failing mid-document leaves the old entries searchable — tested
 - [ ] Changing the embedding model marks the index stale — tested
 
 Model, chunking, retrieval, or prompt change:
 
-- [ ] `tests/model/` run by the human; models and result in the report
+- [ ] `tests/model/` run by the human: models' SHA-256, passed / failed / skipped counts,
+      zero skipped
 
 Dependency, build, or packaging change:
 
