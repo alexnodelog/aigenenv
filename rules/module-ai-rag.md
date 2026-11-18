@@ -261,6 +261,8 @@ Additions to the archetype's `--self-check`, in its temp directory, with no mode
   path, a symlink pointing out, a file above the size limit.
 - Prompt assembly is tested with a passage that does not fit `n_ctx`, and with a document
   that contains instructions.
+- sqlite-vec is tested failing to load: connections still open, ordinary queries work,
+  the index features report the cause, and extension loading is off again.
 - The parsing child process is tested with a fake parser that hangs and one that crashes:
   each is terminated, the document marked failed, and the next document still parsed.
 
