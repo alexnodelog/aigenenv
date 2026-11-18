@@ -737,12 +737,20 @@ is pinned exactly.
 
 **Why GGUF only.** Pickle-based weights run code when loaded. GGUF does not, but the
 loader that parses it has had memory-safety flaws, so the file's origin is the user's
-choice and its SHA-256 is checked before every load.
+choice, checked against the hash on its official download page. Afterwards the file is
+rehashed only when its size or modification time changes: a full SHA-256 runs at about
+1 GB/s, so rehashing a multi-gigabyte model on every launch costs seconds to a minute,
+and a replacement by a process that can already write the file is out of scope.
 
-**No data leaves the machine.** The product makes no network calls, and its tests run
-with sockets blocked so that a dependency reaching out fails the suite. Real user data
-never enters the development machine or the coding agent's context: development and
-tests use fixtures under `tests/` only.
+**No data leaves the machine — what that covers.** The product's own code opens no
+connection outside the machine: a Python-level guard refuses one at run time in every
+process, and tests run with sockets blocked. Native code is not covered: a parser or
+llama.cpp exploited by a crafted file runs with the user's permissions, and a child
+process is not a sandbox. Against that, the protection is running on a PC with no
+network — the reason development is online and use is offline. An OS firewall rule per
+app was not adopted: three OS-specific mechanisms needing admin rights, too heavy for
+one maintainer. Real user data never enters the development machine or the coding
+agent's context: development and tests use fixtures under `tests/` only.
 
 **On orchestration frameworks.** LangChain and LlamaIndex can run fully locally; their
 service integrations ship as separate packages. Two risks remain. Their examples and

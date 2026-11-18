@@ -1,7 +1,8 @@
 # rules/module-ai-rag.md
 
 An open-source model run inside the app on the user's own PC — chat, search, or an agent
-over the user's own files — with nothing it reads leaving the machine.
+over the user's own files — whose own code sends nothing outside the machine, run on a PC
+with no network so that nothing else can (§4.6).
 
 `GLOBAL_RULES.md` → `rules/<archetype>.md` and this file → `CLAUDE.md` → current task. The
 archetype rule says how the app is built; this file says how it runs a model and searches
@@ -70,6 +71,8 @@ Additions to the archetype layout:
 │       ├── model_child.py         the model child process: the only module importing llama_cpp
 │       ├── model_llamaserver.py   llama-server Alternative only, instead of the two above
 │       ├── vectors_sqlitevec.py   VectorStore
+│       ├── netguard.py            the runtime network guard (§4.6)
+│       ├── children.py            starting and watching child processes
 │       └── documents_fs.py        DocumentSource, one module per parser beside it
 └── tests/
     ├── fixtures/documents/  made-up documents only
@@ -88,8 +91,9 @@ Additions to the archetype layout:
 - `tests/test_boundaries.py` also fails on `llama_cpp` imported outside
   `adapters/model_child.py`, `sqlite_vec` imported from `domain/` or `application/`, and on any of `socket`, `urllib.request`, `http.client`,
   `requests`, `httpx`, `aiohttp`, `huggingface_hub`, `PySide6.QtNetwork` imported anywhere
-  under `src/`. The one exemption: with the `llama-server` Alternative, its adapter
-  (`adapters/model_llamaserver.py`) MAY import `http.client`.
+  under `src/`. The exemptions: `adapters/netguard.py` imports `socket`, and with the
+  `llama-server` Alternative its adapter (`adapters/model_llamaserver.py`) MAY import
+  `http.client`.
 - `*.gguf` is in `.gitignore`. No model file is committed, bundled into the installer, or
   stored under `tests/`.
 
@@ -130,11 +134,14 @@ Additions to the archetype layout:
 - Model and embedding model are chosen by the user through the UI: file path, its SHA-256,
   and the source the user named. They are rows in the app's database, not entries in the
   settings file.
-- The first time a file is chosen, the user pastes the SHA-256 its publisher lists. The
-  app computes the file's hash and refuses the file when the pasted value is empty or
-  different. The computed hash is never accepted in place of the publisher's.
-- The app computes the SHA-256 on a worker before every load, and refuses to load a file
-  whose hash differs from the recorded one.
+- The first time a file is chosen, the user pastes the SHA-256 listed on the model's
+  official download page; the dialog says so. The app computes the file's hash and
+  refuses the file when the pasted value is empty or different. The computed hash is
+  never accepted in place of the publisher's.
+- With the hash, the app records the file's size and modification time. Before each load
+  it compares both; if either differs, it computes the SHA-256 again on a worker and
+  refuses a file whose hash no longer matches. A change that keeps both — silent disk
+  corruption — is not detected.
 - A model file is opened only as GGUF, and only by the runtime: the Default's child
   process, or `llama-server --model`. `Llama.from_pretrained`, `llama-server`'s download
   options (`-hf`, `--hf-repo`), and every other code path that downloads are PROHIBITED.
@@ -145,8 +152,10 @@ Additions to the archetype layout:
 - The sqlite-vec extension is loaded on every connection by a SQLAlchemy `connect` event:
   enable extension loading, `sqlite_vec.load`, and disable extension loading again whether
   the load succeeded or not.
-- A load failure is caught inside that event and never raised from it; raising there makes
-  every connection fail. The cause goes into one status object owned by the adapter. A
+- Every load failure is caught inside that event and never raised from it; raising there
+  makes every connection fail. The one exception: if extension loading cannot be switched
+  off again, the error propagates and that connection fails rather than stay open with
+  loading enabled. The cause goes into one status object owned by the adapter. A
   failure on any connection sets it, and nothing clears it until the app restarts — not a
   later connection that loads the extension. The application reads it: the features that need the index
   are disabled and the cause is logged and shown; everything else keeps working.
@@ -165,6 +174,10 @@ Additions to the archetype layout:
   entries searchable and the document listed as not indexed.
 - `vec0` tables have no foreign keys. Deleting a document deletes its chunks and their
   vectors in the same transaction, by explicit statements, tested (§8).
+- The total number of documents indexed and the number of chunks per document have
+  limits recorded in `DECISIONS.md`. At either limit indexing stops for that document or
+  run and tells the user why. A write that fails — a full disk included — rolls back its
+  transaction, keeps the old entries, and stops the run.
 - Every query against a `vec0` table is parameterized SQL in `adapters/vectors_sqlitevec.py`;
   vectors are bound with `sqlite_vec.serialize_float32`.
 
@@ -174,17 +187,19 @@ Additions to the archetype layout:
   user operates. `DocumentSource` resolves every path, symlinks included, and refuses one
   that does not land inside an allowed folder. It reads only the file types that have a
   parser, and refuses files above a size limit recorded in `DECISIONS.md`.
-- A parser can hang or crash on a malformed file, and a worker thread cannot be stopped
-  (archetype §4.1). Parsing therefore runs in a child process started with
+- A parser can hang, crash, or exhaust memory on a malformed file, and a worker thread
+  cannot be stopped (archetype §4.1). Parsing therefore runs in a child process started with
   `multiprocessing` (`spawn`), one document at a time. `DocumentSource` opens and checks
   the file in the app's process and passes the child its bytes, never a path. The child
   returns text only and never touches the database.
-- The child fails itself once its text passes a maximum number of characters, and the
-  worker checks the length again. The worker watches the child with a time limit, and
-  polls its resident memory with `psutil` at a fixed interval. The time limit, the
-  character limit, the memory limit and the interval are recorded in `DECISIONS.md`. On
-  expiry, crash, oversized output, or memory above the limit, it terminates the child and
-  marks that document as failed.
+- The child refuses to send text longer than a maximum number of characters. The worker
+  watches the child with a time limit and polls its resident memory with `psutil` at a
+  fixed interval; on Linux the child also sets the memory limit as a hard limit. The
+  limits and the interval are recorded in `DECISIONS.md`. On expiry, crash, oversized
+  output, or memory above the limit, it terminates the child and marks that document as
+  failed.
+- Polling is a mitigation, not a hard cap: memory can rise past the limit between two
+  polls. Outside Linux nothing stops that.
 - A parser that starts processes of its own is not adopted.
 - Out of scope: a process that can already write to the allowed folders or to a model file
   — a symlink swapped after the path check, a file replaced after its hash was computed.
@@ -225,12 +240,19 @@ This section is the floor every such app keeps.
   `llama-server` Alternative's connection to 127.0.0.1, from its adapter alone. A
   dependency that can download — a model hub client, a parser's optional fetcher — has
   that path disabled in code.
-- What the checks cover: the boundary check (§3) catches network libraries imported by the
-  app's own code; the socket-blocked tests (§6) and `--self-check` (§5.3) catch Python code
-  that opens a socket on the paths they run.
-- What they do not cover: native code and child processes. Every new dependency is
-  therefore reviewed for network use before it is added, and the release is run once on a
-  PC with no network before it is handed to anyone.
+- At run time every process — the app and each child — installs the network guard as the
+  first statement of its entry point, before any other import. It refuses every
+  connection, bind, datagram and name lookup outside the machine, and allows loopback and
+  Unix sockets.
+- Before release: the boundary check (§3) catches network libraries imported by the app's
+  own code; the socket-blocked tests (§6) and `--self-check` (§5.3) catch Python code that
+  opens a socket on the paths they run.
+- What none of these cover: native code — a parser or llama.cpp compromised by a crafted
+  file, a library's C extension. A child process isolates hangs, crashes and memory; it
+  is not a sandbox, and runs with the user's permissions. Against native code the
+  protection is a PC with no network. Every new dependency is reviewed for network use
+  before it is added, and the release is run once on a PC with no network before it is
+  handed to anyone.
 - Real user documents never reach the development machine or the coding agent's context.
   Development, tests, and bug reproduction use made-up documents under
   `tests/fixtures/documents/`. A bug seen only with a real document is reproduced by the
@@ -270,16 +292,18 @@ Additions to the archetype's `--self-check`, in its temp directory, with no mode
   it without a model, and get an answer from its health endpoint.
 - Load sqlite-vec into the temp database, print `vec_version()`, create a `vec0` table,
   insert one vector, find it — proves the extension ships and can be loaded.
-- With all sockets blocked for the whole run, in the child process too; the Alternative's
-  check allows 127.0.0.1 only.
+- Under the network guard, in every child too; fail unless a connection to an outside
+  address is refused — proves the guard is installed in the packaged build.
 
 ### 5.4 Package
 
 - Model files are never inside the installer. `README.md` lists the models the app was
   tested with, their sources and SHA-256, and how to choose them in the app.
-- `README.md` also states that the app opens no connection that leaves the machine — with
-  the `llama-server` Alternative, that it talks to it over 127.0.0.1 only — and how to
-  carry the installer and models to an offline PC and check them there.
+- `README.md` also states that the app's own code opens no connection that leaves the
+  machine — with the `llama-server` Alternative, that it talks to it over 127.0.0.1 only;
+  that native code compromised by a crafted document or model file is stopped only by
+  running on a PC with no network, and that this risk remains on a networked PC; and how
+  to carry the installer and models to an offline PC and check them there.
 
 ### 5.5 CI
 
@@ -312,6 +336,15 @@ Additions to the archetype's `--self-check`, in its temp directory, with no mode
   request on the same model succeeds.
 - Agent tools are tested with calls the spec does not allow — an unlisted tool, a path
   outside the allowed folders, a new file whose name exists — each refused by the executor.
+- Every call that needs confirmation is tested three ways: before confirmation nothing
+  changes; after confirmation exactly the shown targets change; after refusal nothing
+  changes. The targets shown are the targets the executor acts on.
+- The network guard is tested: an outside address, an outside name and a bind to all
+  interfaces are refused; loopback and `spawn` pipes still work.
+- The index limits are tested: indexing stops at the document and chunk limits, and a
+  write that fails mid-document keeps the old entries.
+- The model-file check is tested: an unchanged file loads without rehashing; a changed size
+  or modification time triggers a rehash, and a changed hash refuses the load.
 - `tests/model/` is excluded from the default run and from CI. The human runs it before a
   release and after changing a model, the chunking, the retrieval, or a prompt. Run
   explicitly, a missing model file is a failure, never a skip. The release task's report gives
@@ -346,6 +379,7 @@ around a prohibition when something does not work.
    a URL in a fixture. A test that needs a model goes under `tests/model/` and waits for
    the human's file.
 4. Turning a failing check off: `@pytest.mark.enable_socket`, removing `--disable-socket`,
+   removing or delaying `install_network_guard()` because a library fails under it,
    skipping the hash check because hashing is slow, `allow_dangerous_deserialization=True`
    on a pickled index.
 5. Truncating a prompt by characters, or raising `n_ctx` past what the model was trained
@@ -360,6 +394,7 @@ Every task here:
 - [ ] Boundary check passes, including the network imports of §3
 - [ ] Test suite passes with sockets blocked; only the `llama-server` adapter's model
       tests allow 127.0.0.1, and nothing allows any other address
+- [ ] Every process entry point installs the network guard first
 - [ ] No real user document in the repository, the fixtures, or the task's report
 
 Index or schema change:
