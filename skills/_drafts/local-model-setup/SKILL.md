@@ -1,6 +1,6 @@
 ---
 name: local-model-setup
-description: Add llama-cpp-python and sqlite-vec to a pc-app-python project, pin their build dependencies, load sqlite-vec on each connection, run the model and parsers in watched child processes, install the runtime network guard, extend --self-check, the test setup and CI. Use when adding the AI/RAG module to a project, upgrading llama-cpp-python or sqlite-vec, switching to a GPU build, or editing pyproject.toml's build constraints, tests/model/conftest.py, the self-check, or the code that starts the model or parser child process, or the network guard.
+description: Add llama-cpp-python and sqlite-vec to a pc-app-python project, pin their build dependencies, load sqlite-vec on each connection, run the model and parsers in watched child processes, install the runtime network guard, write agent-tool files safely, extend --self-check, the test setup and CI. Use when adding the AI/RAG module to a project, upgrading llama-cpp-python or sqlite-vec, switching to a GPU build, or editing pyproject.toml's build constraints, tests/model/conftest.py, the self-check, or the code that starts the model or parser child process, the network guard, or an agent tool that writes files.
 ---
 
 # local-model-setup (draft)
@@ -128,9 +128,19 @@ WHERE embedding MATCH :query AND k = :k
 
 ## 4. Network guard (rule §4.6)
 
-`adapters/netguard.py`. `install_network_guard()` is the first statement of every process
-entry point — the app's `main`, the model child, the parser child — before any other
-import, so that `ssl` and every library subclass the guarded socket.
+`adapters/netguard.py`. It is installed at module level, as the first statements of the
+app's entry script, before any other import:
+
+```python
+from <app>.adapters.netguard import install_network_guard
+install_network_guard()
+```
+
+A `spawn` child runs the entry script again as `__mp_main__` before it imports the
+target's module, so the guard is in place in every child before any of its code runs
+(Verified with `guard_installed()` evaluated at the target module's import). The model
+and parser entry functions call `install_network_guard()` again as their first statement,
+for a child started some other way.
 
 ```python
 import ipaddress
@@ -140,16 +150,12 @@ import threading
 _AF_UNIX = getattr(socket, "AF_UNIX", None)
 _real = {name: getattr(socket, name) for name in (
     "getaddrinfo", "gethostbyname", "gethostbyname_ex", "gethostbyaddr", "getnameinfo")}
-_allowed_ports: set[int] = set()   # loopback ports this process bound, or registered
+_allowed: set[tuple] = set()  # endpoints this process bound, or the adapter registered
 _lock = threading.Lock()
 
 
 class NetworkRefused(OSError):
     pass
-
-
-def _host(address):
-    return address[0] if isinstance(address, tuple) else address
 
 
 def _loopback(host) -> bool:
@@ -161,48 +167,57 @@ def _loopback(host) -> bool:
         return False
 
 
-def _check_connect(family, address) -> None:
+def _endpoint(family, kind, address) -> tuple:
     if family == _AF_UNIX:
-        return
+        return (family, kind, address)
+    host = "127.0.0.1" if address[0] in ("", "localhost") else address[0]
+    return (family, kind, host, address[1])
+
+
+def _check_connect(family, kind, address) -> None:
+    if family != _AF_UNIX and not _loopback(address[0]):
+        raise NetworkRefused(f"refused by the network guard: {address!r}")
     with _lock:
-        known = isinstance(address, tuple) and address[1] in _allowed_ports
-    if not (_loopback(_host(address)) and known):
-        raise NetworkRefused(f"connection refused by the network guard: {address!r}")
+        known = _endpoint(family, kind, address) in _allowed
+    if not known:
+        raise NetworkRefused(f"refused by the network guard (not opened here): {address!r}")
 
 
 def _check_bind(family, address) -> None:
-    if family != _AF_UNIX and not _loopback(_host(address)):
+    if family != _AF_UNIX and not _loopback(address[0]):
         raise NetworkRefused(f"bind refused by the network guard: {address!r}")
 
 
-def allow_loopback_port(port: int) -> None:
-    """Called by the llama-server adapter for the port of the server it started."""
+def allow_endpoint(host: str, port: int) -> None:
+    """Called by the llama-server adapter for the server it started: TCP, loopback."""
+    if not _loopback(host):
+        raise NetworkRefused(f"only loopback endpoints can be allowed: {host!r}")
     with _lock:
-        _allowed_ports.add(port)
+        _allowed.add(_endpoint(socket.AF_INET, socket.SOCK_STREAM, (host, port)))
 
 
 class _GuardedSocket(socket.socket):
     def connect(self, address):
-        _check_connect(self.family, address)
+        _check_connect(self.family, self.type, address)
         return super().connect(address)
 
     def connect_ex(self, address):
-        _check_connect(self.family, address)
+        _check_connect(self.family, self.type, address)
         return super().connect_ex(address)
 
     def bind(self, address):
         _check_bind(self.family, address)
         super().bind(address)
-        if self.family != _AF_UNIX:
-            allow_loopback_port(self.getsockname()[1])
+        with _lock:
+            _allowed.add(_endpoint(self.family, self.type, self.getsockname()))
 
     def sendto(self, data, *args):
-        _check_connect(self.family, args[-1])
+        _check_connect(self.family, self.type, args[-1])
         return super().sendto(data, *args)
 
     def sendmsg(self, buffers, ancdata=(), flags=0, address=None):
         if address is not None:
-            _check_connect(self.family, address)
+            _check_connect(self.family, self.type, address)
             return super().sendmsg(buffers, ancdata, flags, address)
         return super().sendmsg(buffers, ancdata, flags)
 
@@ -211,30 +226,36 @@ def _name_guard(name):
     real = _real[name]
 
     def guarded(host, *args, **kwargs):
-        if host is not None and not _loopback(_host(host)):
+        target = host[0] if isinstance(host, tuple) else host
+        if target is not None and not _loopback(target):
             raise NetworkRefused(f"{name} refused by the network guard: {host!r}")
         return real(host, *args, **kwargs)
     return guarded
 
 
 def install_network_guard() -> None:
-    """First statement of every process entry point, before any other import."""
     socket.socket = _GuardedSocket                       # type: ignore[misc]
     for name in _real:
         setattr(socket, name, _name_guard(name))
+
+
+def guard_installed() -> bool:
+    return socket.socket is _GuardedSocket
 ```
 
-What it covers, by API of the `socket` module:
+What it covers, by API of the `socket` module. An endpoint is the address family, socket
+type, address and port — not the port alone.
 
 | Refused | Allowed |
 |---|---|
-| `connect`, `connect_ex`, `sendto`, `sendmsg` to any address that is not loopback | Unix sockets |
-| Loopback ports this process did not bind and the `llama-server` adapter did not register (`allow_loopback_port`) — another local service could relay outside | Loopback ports this process bound itself: `socketpair` on Windows is built that way, and `asyncio` uses it |
-| `bind` to any address that is not loopback | `multiprocessing` pipes |
+| `connect`, `connect_ex`, `sendto`, `sendmsg` to any address that is not loopback | Endpoints this process bound itself: `socketpair` (Windows builds it on loopback; Linux uses an unbound Unix pair), `asyncio` |
+| Loopback endpoints and Unix socket paths this process did not bind — another local service could relay outside — except the one the `llama-server` adapter registers with `allow_endpoint` | `multiprocessing` pipes; `spawn` |
+| `bind` to any address that is not loopback | |
 | `getaddrinfo`, `gethostbyname`, `gethostbyname_ex`, `gethostbyaddr`, `getnameinfo` for any host that is not loopback | Names and addresses of this machine |
 
-It is Python-level only: native code, and code that imports `_socket` directly, are not
-seen (rule §4.6).
+`multiprocessing.Manager` and `Listener`/`Client` across processes connect to a Unix
+socket another process bound, and are refused; the app uses pipes only. The guard is
+Python-level: native code, and code importing `_socket` directly, are not seen (rule §4.6).
 
 ## 5. Child processes (rule §4.1, §4.4)
 
@@ -246,7 +267,7 @@ itself (Verified).
 
 ```python
 import multiprocessing as mp
-import sys
+import pickle
 import time
 
 import psutil
@@ -258,6 +279,10 @@ class ChildFailed(Exception):
 
 class RequestFailed(Exception):
     """The child reported an error for one request; it is still running."""
+
+
+class Cancelled(Exception):
+    """The child confirmed a cancel; the answer is incomplete. It is still running."""
 
 
 def _stop(proc) -> None:
@@ -284,16 +309,19 @@ def _close(*conns) -> None:
                 pass
 
 
-def _receive(conn, proc, deadline, *, interval, watched=None, rss_limit=None):
+def _receive(conn, proc, deadline, *, interval, max_bytes, watched=None, rss_limit=None):
     """Wait for one message; raise ChildFailed on time, death, or memory.
 
     Limits are checked once per interval: a message that arrives up to one interval
     after the deadline is still accepted, and memory can pass rss_limit between checks.
+    A message longer than max_bytes is refused before it is unpickled.
     """
     while True:
         if conn.poll(interval):
             try:
-                return conn.recv()
+                return pickle.loads(conn.recv_bytes(max_bytes))
+            except OSError:  # longer than max_bytes
+                raise ChildFailed(f"message over {max_bytes} bytes") from None
             except EOFError:  # the child died: a closed pipe polls as readable
                 proc.join(interval)
                 raise ChildFailed(f"exited with {proc.exitcode}") from None
@@ -311,7 +339,7 @@ def _receive(conn, proc, deadline, *, interval, watched=None, rss_limit=None):
 
 # --- one-shot child: a parser, one document per process -----------------------
 
-def run_once(target, payload, *, timeout, rss_limit, interval=0.2):
+def run_once(target, payload, *, timeout, rss_limit, max_bytes, interval=0.2):
     """Run target(conn, payload) in a new child and return the one message it sends."""
     ctx = mp.get_context("spawn")
     proc = recv = send = None
@@ -323,7 +351,7 @@ def run_once(target, payload, *, timeout, rss_limit, interval=0.2):
         send = None
         watched = psutil.Process(proc.pid)
         deadline = time.monotonic() + timeout
-        result = _receive(recv, proc, deadline, interval=interval,
+        result = _receive(recv, proc, deadline, interval=interval, max_bytes=max_bytes,
                           watched=watched, rss_limit=rss_limit)
         proc.join(interval)
         return result
@@ -337,8 +365,10 @@ def run_once(target, payload, *, timeout, rss_limit, interval=0.2):
 class ModelChild:
     """The model process. Used only from the model worker thread."""
 
-    def __init__(self, target, args, *, load_timeout, chunk_timeout, interval=0.2):
+    def __init__(self, target, args, *, load_timeout, chunk_timeout,
+                 max_bytes=1 << 20, interval=0.2):
         self._target, self._args = target, args
+        self._max_bytes = max_bytes
         self._load_timeout, self._chunk_timeout = load_timeout, chunk_timeout
         self._interval = interval
         self._proc = self._to_child = self._from_child = None
@@ -355,8 +385,8 @@ class ModelChild:
             _close(child_in, child_out)
             child_in = child_out = None
             deadline = time.monotonic() + self._load_timeout
-            if _receive(self._from_child, self._proc, deadline,
-                        interval=self._interval) != ("ready",):
+            if _receive(self._from_child, self._proc, deadline, interval=self._interval,
+                        max_bytes=self._max_bytes) != ("ready",):
                 raise ChildFailed("no ready message")
         except BaseException:
             _close(child_in, child_out)
@@ -364,10 +394,14 @@ class ModelChild:
             raise
 
     def request(self, message, cancelled=lambda: False):
-        """Yield the chunks of one answer. On any failure the child is stopped."""
+        """Yield the chunks of one answer.
+
+        Ends normally only for a complete answer. Raises Cancelled or RequestFailed with
+        the child still running, or ChildFailed with it stopped.
+        """
         if self._proc is None or not self._proc.is_alive():
             self.start()
-        error = None
+        outcome = None
         try:
             self._to_child.send(("request", message))
             cancel_sent = False
@@ -377,19 +411,22 @@ class ModelChild:
                     cancel_sent = True
                 deadline = time.monotonic() + self._chunk_timeout
                 kind, *body = _receive(self._from_child, self._proc, deadline,
-                                       interval=self._interval)
+                                       interval=self._interval, max_bytes=self._max_bytes)
                 if kind == "chunk":
                     yield body[0]
                 elif kind == "done":
                     break
+                elif kind == "cancelled":
+                    outcome = Cancelled()
+                    break
                 elif kind == "error":
-                    error = body[0]
+                    outcome = RequestFailed(body[0])
                     break
         except BaseException:  # includes the worker abandoning the generator
             self.stop()
             raise
-        if error is not None:
-            raise RequestFailed(error)
+        if outcome is not None:
+            raise outcome
 
     def stop(self) -> None:
         _stop(self._proc)
@@ -409,22 +446,31 @@ def serve(inbox, outbox, load, answer):
         if kind != "request":
             continue
         try:
+            status = ("done",)
             for chunk in answer(model, body[0]):
                 outbox.send(("chunk", chunk))
                 if inbox.poll(0) and inbox.recv() == ("cancel",):
+                    status = ("cancelled",)
                     break
-            outbox.send(("done",))
+            outbox.send(status)
         except Exception as exc:
             outbox.send(("error", repr(exc)))
 ```
 
 - Limits are checked once per `interval`: a message that arrives within one interval
   after the deadline is still accepted, and memory can pass `rss_limit` between checks.
-- `ChildFailed`: the child hung, died, or passed the memory limit; it has been stopped,
-  and the next `request` starts a new one. `RequestFailed`: the model raised for one
-  request; the child keeps running.
+- A message is read with `recv_bytes(max_bytes)` and unpickled only after its length is
+  known, so an oversized result never enters the app's memory. Once `poll` reports data,
+  the read waits for the whole message; a child that froze in the middle of writing one
+  is not covered — messages are small (one chunk, or text under the character limit).
+- `ChildFailed`: the child hung, died, sent too much, or passed the memory limit; it has
+  been stopped, and the next `request` starts a new one. `RequestFailed`: the model raised
+  for one request. `Cancelled`: the child confirmed a cancel. With both, the child keeps
+  running. A `request` that ends without raising is a complete answer — the only one the
+  UI may show as complete.
 - Cancel: the worker passes `cancelled`, checked between chunks; the child stops at its
-  next chunk. A child that sends nothing within `chunk_timeout` is stopped.
+  next chunk and answers `cancelled`. A child that sends nothing within `chunk_timeout`
+  is stopped.
 - A worker that stops iterating a `request` before it ends abandons it, and the child is
   stopped: an answer half-read is not resumed.
 - `target`, `load` and `answer` are module-level functions in their own modules
@@ -473,14 +519,74 @@ def parse_main(conn, payload):
         conn.send(("text", text))
 ```
 
-## 6. Self-check additions (rule §5.3)
+## 6. Agent tool writes (rule §4.5)
+
+`application/` decides what to write; this adapter writes it. A new file is created with
+`open(..., "xb")`, so a name that appears between the check and the write is refused, not
+overwritten. An overwrite takes the `Target` captured when the confirmation was shown and
+refuses if the file changed since; it writes a temporary file in the same folder and
+replaces the original with `os.replace`, so a crash leaves either the old file or the new
+one.
+
+```python
+import os
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+
+
+class WriteRefused(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class Target:
+    """What the user confirmed: the path and the file as it was when shown."""
+    path: Path
+    size: int
+    mtime_ns: int
+    inode: int
+
+
+def snapshot(path: Path) -> Target:
+    st = path.stat()
+    return Target(path, st.st_size, st.st_mtime_ns, st.st_ino)
+
+
+def create_new(path: Path, data: bytes) -> None:
+    """A new file: fails if the name exists by the time it is written (no-clobber)."""
+    try:
+        with open(path, "xb") as f:
+            f.write(data)
+    except FileExistsError:
+        raise WriteRefused(f"{path} now exists; an overwrite needs confirmation") from None
+
+
+def overwrite(confirmed: Target, data: bytes) -> None:
+    """Replace a confirmed file atomically, only if it is still the file that was shown."""
+    if snapshot(confirmed.path) != confirmed:
+        raise WriteRefused(f"{confirmed.path} changed after it was confirmed")
+    fd, tmp = tempfile.mkstemp(dir=confirmed.path.parent, prefix=".tmp-")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, confirmed.path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+```
+
+## 7. Self-check additions (rule §5.3)
 
 These run wherever the archetype's `--self-check` runs, the packaged build included
 (`pyside-release`). The self-check runs under the same guard as the product (§4), in the
 app and in every child it starts. Then:
 
 - Connect to `192.0.2.1` (a documentation-only address) and fail unless the guard refuses
-  it — proves the guard is installed in the packaged build.
+  it, and have each child report `guard_installed()` — proves the guard is installed in
+  the packaged build, in every process.
 - Start a `ModelChild` whose `load` imports `llama_cpp` and returns its version instead of
   a model; fail unless it answers — proves `spawn` and the native library work in the
   packaged build.
@@ -488,7 +594,7 @@ app and in every child it starts. Then:
   print `vec_version()`, create a `vec0` table with dimension 3, insert one vector, search
   for it, and fail if it is not returned.
 
-## 7. Test setup (rule §6)
+## 8. Test setup (rule §6)
 
 Merge into the archetype's existing pytest settings; do not replace them. Add
 `--disable-socket -m 'not model'` to the existing `addopts`, and the `model` entry to the
@@ -518,17 +624,23 @@ holds the cause, and `SELECT load_extension('x')` is refused (loading switched o
 
 Tests for §5 use fake `target`, `load` and `answer` functions in a test module: a parser
 that hangs, exits, returns too much text, and allocates past the limit; a model answer
-that hangs, exits, raises, and streams normally, with a cancel after the first chunk and
-a request after each failure; and an argument that cannot be pickled, so that
+that hangs, exits, raises, and streams normally, with a cancel after the first chunk
+(which must raise `Cancelled`) and a request after each failure; a parser that sends more
+than `max_bytes`; and an argument that cannot be pickled, so that
 `Process.start()` fails and the original error surfaces with nothing left open.
+
+Tests for §6: a create over an existing name is refused and the file unchanged; an
+overwrite of a file changed after `snapshot` is refused and the file unchanged; a
+confirmed overwrite leaves no temporary file.
 
 Tests for §4 call each API in its table directly — the refused ones with an outside
 address or name and with a loopback port opened by another process, the allowed ones
-with loopback ports this process bound, `socketpair`, `ssl`, an `asyncio` loop and a
-`spawn` pipe. A connection factory (`connect_args={"factory": ...}`) whose
+with endpoints this process bound, `socketpair`, `ssl`, an `asyncio` loop and a `spawn`
+pipe. Refused cases include the same port on another loopback address, UDP to a bound TCP
+port, and a Unix socket bound by another process. A connection factory (`connect_args={"factory": ...}`) whose
 `enable_load_extension` raises tests the three paths of §3.
 
-## 8. CI (rule §5.5)
+## 9. CI (rule §5.5)
 
 - `ci.yml` builds the CPU Default only, with `CMAKE_ARGS` unset. It MAY cache the built
   llama-cpp-python wheel; the cache key includes the OS, the architecture, the runner
@@ -553,11 +665,20 @@ refused; the function-replacement form makes `import ssl` raise `TypeError`.
 
 2026-11-15, same platform: pytest-socket with `--disable-socket --allow-hosts=127.0.0.1` —
 a loopback connection succeeds, an external one is refused; `--disable-socket` alone
-refuses both. A §4-style loop with psutil 7.2.2 ends a child that hangs (time limit) and
+refuses both. A child-watching loop with psutil 7.2.2 ends a child that hangs (time limit) and
 one that allocates past the limit (memory limit), reports one that exits without
 answering (a closed pipe polls as readable and raises `EOFError`), and returns a normal
 child's result.
 `resource.setrlimit(RLIMIT_AS)` also works in a Linux spawn child.
+
+2026-11-16 (third pass), same platform, the code of §4, §5 and §6 as now written: a
+Unix socket and a loopback port bound by another process are refused, and the port
+accepted once registered with `allow_endpoint`; the same port on `127.0.0.2` and UDP to a
+bound TCP port are refused; the process's own Unix socket and loopback port work; the
+guard is installed in a `spawn` child before the target's module is imported. A cancel
+raises `Cancelled` and the same child serves the next request; a parser message over
+`max_bytes` is refused. `create_new` refuses an existing name; `overwrite` refuses a file
+changed after `snapshot`, replaces atomically otherwise, and leaves no temporary file.
 
 2026-11-16 (second pass), same platform, the code of §3, §4 and §5 as now written:
 every refused API in §4's table refuses, including a loopback port opened by another

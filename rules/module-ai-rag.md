@@ -113,9 +113,12 @@ Additions to the archetype layout:
   marks the request failed, and starts a new child for the next request. The worker thread
   itself always ends.
 - Generation streams (`stream=True`) and checks a cancel flag between chunks. Every call
-  sets `max_tokens`. A cancel takes effect at the next chunk; if none arrives within the
-  timeout, the child is terminated as above. Closing the app does the same. A cancelled
-  or failed answer is shown as such, never as complete.
+  sets `max_tokens`. A cancel takes effect at the next chunk, and the child reports it as
+  cancelled, never as done; if no chunk arrives within the timeout, the child is
+  terminated as above. Closing the app does the same. Only an answer the child reports as
+  done is shown as complete; a cancelled or failed one is shown as such.
+- Every message from a child is read with a size limit and refused above it before it is
+  decoded.
 - With the `llama-server` Alternative, the same rules apply with the server in place of
   the child: the app checks the binary's SHA-256, starts it with `--host 127.0.0.1`, an
   unused port and a new random API key, and treats it as ready only when its health
@@ -189,7 +192,9 @@ Additions to the archetype layout:
 - The allowed folders are rows in the database, added only through a folder dialog the
   user operates. `DocumentSource` resolves every path, symlinks included, and refuses one
   that does not land inside an allowed folder. It reads only the file types that have a
-  parser, and refuses files above a size limit recorded in `DECISIONS.md`.
+  parser, and refuses files above a size limit recorded in `DECISIONS.md`. The limit is
+  enforced on the read itself — at most one byte past it is read, and then the file is
+  refused — not only by a size check before opening.
 - A parser can hang, crash, or exhaust memory on a malformed file, and a worker thread
   cannot be stopped (archetype §4.1). Parsing therefore runs in a child process started with
   `multiprocessing` (`spawn`), one document at a time. `DocumentSource` opens and checks
@@ -233,12 +238,20 @@ This section is the floor every such app keeps.
 - Writes go only to the folders the spec allows, checked the same way `DocumentSource`
   checks reads. Writing to a name that already exists is an overwrite and needs
   confirmation like any other change to an existing file.
+- A new file is created so that the create fails if the name exists by then; it never
+  overwrites. An overwrite acts only on the file that was confirmed: if its size,
+  modification time or identity changed since, it is refused. It writes a temporary file
+  in the same folder and atomically replaces the original, so a crash leaves the old file
+  or the new one.
+- Each write has a size limit, each run a limit on the total written, and no write goes
+  below the disk reserve of §4.3; all are recorded in `DECISIONS.md`.
 - No tool runs a shell command, starts a process, or opens a network connection.
 - A tool that changes, moves, or deletes an existing file, or changes the index, runs
   only after the user confirms that call. The confirmation shows the tool, every target
-  path, and the action.
-- The loop that lets the model call tools has a maximum number of model calls, set in the
-  spec. At the limit it stops and tells the user; it never continues unbounded.
+  path, the action, and the content: for a new file what will be written, for an
+  overwrite the difference from the current file.
+- The loop that lets the model call tools has a maximum number of model calls, recorded in
+  `DECISIONS.md`. At the limit it stops and tells the user; it never continues unbounded.
 
 ### 4.6 No network
 
@@ -247,14 +260,18 @@ This section is the floor every such app keeps.
   `llama-server` Alternative's adapter, to the port of the server it started. A dependency
   that can download — a model hub client, a parser's optional fetcher — has that path
   disabled in code.
-- At run time every process — the app and each child — installs the network guard as the
-  first statement of its entry point, before any other import. Through the `socket`
+- At run time the network guard is installed by the first statements of the app's entry
+  script, at module level, before any other import; a `spawn` child runs that script
+  before anything else, so the guard is in place in every child before its code runs.
+  Child entry functions install it again as their first statement. Through the `socket`
   module's API it refuses: connections, datagrams and binds to any address that is not
-  loopback; connections to loopback ports the process did not bind itself, except the
-  port the `llama-server` adapter registers; and name lookups (`getaddrinfo`,
+  loopback; connections to any loopback endpoint or Unix socket path the process did not
+  bind itself — an endpoint being family, type, address and port — except the one
+  endpoint the `llama-server` adapter registers; and name lookups (`getaddrinfo`,
   `gethostbyname`, `gethostbyname_ex`, `gethostbyaddr`, `getnameinfo`) for any host that
-  is not loopback. Unix sockets, `multiprocessing` pipes and sockets the process connects
-  to itself stay allowed.
+  is not loopback. `multiprocessing` pipes and endpoints the process bound itself stay
+  allowed; `multiprocessing` managers and listeners across processes do not, and are
+  not used.
 - Before release: the boundary check (§3) catches network libraries imported by the app's
   own code; the socket-blocked tests (§6) and `--self-check` (§5.3) catch Python code that
   opens a socket on the paths they run.
@@ -268,6 +285,24 @@ This section is the floor every such app keeps.
   Development, tests, and bug reproduction use made-up documents under
   `tests/fixtures/documents/`. A bug seen only with a real document is reproduced by the
   human on the offline PC and described in words or as a made-up equivalent.
+
+### 4.7 Settings recorded in `DECISIONS.md`
+
+Every limit above is a project value. No code path uses one that is not recorded, and a
+release is not proposed while any is missing.
+
+| Setting | Unit | Applies to |
+|---|---|---|
+| Model load timeout, chunk timeout | seconds | Model child, `llama-server` (§4.1) |
+| Child message size | bytes | Every child (§4.1) |
+| Document size | bytes | `DocumentSource` (§4.4) |
+| Parse time limit, polling interval | seconds | Parser child (§4.4) |
+| Parsed text length | characters | Parser child (§4.4) |
+| RSS limit; address-space limit (Linux) | bytes | Parser child (§4.4) |
+| Documents indexed; chunks per document | count | Indexing (§4.3) |
+| Disk reserve | bytes | Indexing, tool writes (§4.3, §4.5) |
+| Tool write size; total per run | bytes | Agent tools (§4.5) |
+| Model calls per run | count | Agent loop (§4.5) |
 
 ---
 
@@ -343,17 +378,22 @@ Additions to the archetype's `--self-check`, in its temp directory, with no mode
   `--allow-hosts=127.0.0.1` added, which still refuses every other address.
 - The model child is tested with fake children that hang and that exit: the request
   fails, the child is terminated, and the next request starts a new one.
-- A cancel during generation is tested: the answer is marked cancelled and the next
-  request on the same model succeeds.
+- A cancel during generation is tested: the child reports it as cancelled, the answer is
+  not shown as complete, and the next request on the same model succeeds. A child message
+  over the size limit is refused.
 - Agent tools are tested with calls the spec does not allow — an unlisted tool, a path
   outside the allowed folders, a new file whose name exists — each refused by the executor.
 - Every call that needs confirmation is tested three ways: before confirmation nothing
-  changes; after confirmation exactly the shown targets change; after refusal nothing
-  changes. The targets shown are the targets the executor acts on.
+  changes; after confirmation exactly the shown targets change, with the shown content;
+  after refusal nothing changes. A create over a name that appeared after the check, and
+  an overwrite of a file changed after confirmation, are refused with the file unchanged.
+  The write size, run total and disk reserve limits refuse a write that passes them.
 - The network guard is tested by calling each API it covers directly: every refused case
-  of §4.6, including a loopback port opened by another process; and what stays allowed —
-  a loopback port the process bound, the registered `llama-server` port, `socketpair`,
-  `ssl`, `asyncio`, `spawn` pipes.
+  of §4.6, including a loopback port and a Unix socket opened by another process, the same
+  port on another loopback address, and UDP to a bound TCP port; and what stays allowed —
+  endpoints the process bound, the registered `llama-server` endpoint, `socketpair`,
+  `ssl`, `asyncio`, `spawn` pipes. A spawned child reports that the guard was installed
+  before its module was imported.
 - Child-process cleanup is tested with a start that fails inside `Process.start()`: the
   original error surfaces, and no process or pipe is left open.
 - sqlite-vec loading is also tested with a `sqlite3` that cannot load extensions: the
@@ -370,7 +410,8 @@ Additions to the archetype's `--self-check`, in its temp directory, with no mode
 - Fake ports return fixed values written in the test. A fake model that answers questions
   is test code only and MUST NOT exist under `src/` (`GLOBAL_RULES.md` §5.4).
 - `DocumentSource` is tested with paths that escape an allowed folder: `..`, an absolute
-  path, a symlink pointing out, a file above the size limit.
+  path, a symlink pointing out, and a file above the size limit, including one that
+  grows past it after the size check.
 - Prompt assembly is tested with a passage that does not fit `n_ctx`, and with a document
   that contains instructions.
 - sqlite-vec is tested failing to load: connections still open, ordinary queries work,
@@ -413,6 +454,7 @@ Every task here:
       tests allow 127.0.0.1, and nothing allows any other address
 - [ ] Every process entry point installs the network guard first
 - [ ] No real user document in the repository, the fixtures, or the task's report
+- [ ] Every value in §4.7 that the task's code uses is recorded in `DECISIONS.md`
 
 Index or schema change:
 
