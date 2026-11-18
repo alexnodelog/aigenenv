@@ -17,10 +17,17 @@ here. This draft leaves `_drafts/` only when the Unverified list at the end is e
    --version`, or on Windows the VS Build Tools C++ workload.
 2. `uv add "llama-cpp-python==<version>" "sqlite-vec==<version>" "psutil==<version>"` and
    `uv add --dev pytest-socket`. Exact versions only.
-3. Starting list: `uv pip compile` of `scikit-build-core[pyproject]`. Then do a clean build
-   with verbose output (step 5 with `-v`). The packages installed into the build
-   environment are the authoritative list: `cmake` and `ninja` appear there only when the
-   system has none, and compile does not show them. Every package in that list is pinned:
+3. Build the list. Take the `[build-system] requires` line from the llama-cpp-python
+   source distribution's `pyproject.toml` (for 0.3.36: `scikit-build-core[pyproject]>=0.9.2`)
+   and resolve it:
+
+   ```bash
+   printf 'scikit-build-core[pyproject]>=0.9.2\n' | uv pip compile - --no-header
+   ```
+
+   Pin every package it prints, and also `cmake` and `ninja`: scikit-build-core asks for
+   them only on a machine that has none, so pinning them always keeps machines alike. A
+   package that appears in the build log of step 5 but not in the list is added to it.
 
    ```toml
    [tool.uv]
@@ -61,7 +68,6 @@ exception raised there makes every connection fail, and the rule keeps the rest 
 database working.
 
 ```python
-import sqlite3
 import sqlite_vec
 from sqlalchemy import event
 
@@ -76,15 +82,19 @@ def install_vec_loader(engine, status: VecStatus) -> None:
     def _load_vec(dbapi_conn, _record):
         try:
             dbapi_conn.enable_load_extension(True)
-        except Exception as exc:  # noqa: BLE001 — every load failure is caught
+        except Exception as exc:  # noqa: BLE001
+            # Loading was never switched on, so there is nothing to switch off; calling
+            # enable_load_extension(False) here would fail the same way and lose the
+            # connection.
             status.error = status.error or repr(exc)
             return
         try:
             sqlite_vec.load(dbapi_conn)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — every load failure is caught
             status.error = status.error or repr(exc)
         finally:
-            # Not caught: if loading cannot be switched off, this connection must fail.
+            # Not caught: if loading cannot be switched off, this connection must fail
+            # rather than stay open with it on.
             dbapi_conn.enable_load_extension(False)
 ```
 
@@ -94,10 +104,11 @@ off until the app restarts.
 
 Typical causes: `AttributeError` (this Python's `sqlite3` has no extension support),
 `sqlite3.OperationalError` (loading not authorised, or the extension file not loadable).
-Every exception is caught, so the connection stays usable, extension loading is off
-again, and `status.error` keeps the first cause for the log and the message the user
-sees. The one exception that escapes is a failure to switch loading off: that connection
-fails rather than stay open with loading enabled.
+Every exception is caught and the connection stays usable; `status.error` keeps the first
+cause. Switching loading off is attempted whenever switching it on succeeded, and its
+failure is the one exception that escapes. When switching on itself fails, loading was
+never on: calling `enable_load_extension(False)` then fails the same way and would cost
+the connection (Verified).
 
 A `vec0` table is created by a migration:
 
@@ -124,19 +135,24 @@ import, so that `ssl` and every library subclass the guarded socket.
 ```python
 import ipaddress
 import socket
+import threading
 
 _AF_UNIX = getattr(socket, "AF_UNIX", None)
-_real_getaddrinfo = socket.getaddrinfo
+_real = {name: getattr(socket, name) for name in (
+    "getaddrinfo", "gethostbyname", "gethostbyname_ex", "gethostbyaddr", "getnameinfo")}
+_allowed_ports: set[int] = set()   # loopback ports this process bound, or registered
+_lock = threading.Lock()
 
 
 class NetworkRefused(OSError):
     pass
 
 
-def _local(family, address) -> bool:
-    if family == _AF_UNIX:
-        return True
-    host = address[0] if isinstance(address, tuple) else address
+def _host(address):
+    return address[0] if isinstance(address, tuple) else address
+
+
+def _loopback(host) -> bool:
     if host in ("", "localhost"):
         return True
     try:
@@ -145,52 +161,88 @@ def _local(family, address) -> bool:
         return False
 
 
-def _check(family, address) -> None:
-    if not _local(family, address):
-        raise NetworkRefused(f"connection outside this machine refused: {address!r}")
+def _check_connect(family, address) -> None:
+    if family == _AF_UNIX:
+        return
+    with _lock:
+        known = isinstance(address, tuple) and address[1] in _allowed_ports
+    if not (_loopback(_host(address)) and known):
+        raise NetworkRefused(f"connection refused by the network guard: {address!r}")
+
+
+def _check_bind(family, address) -> None:
+    if family != _AF_UNIX and not _loopback(_host(address)):
+        raise NetworkRefused(f"bind refused by the network guard: {address!r}")
+
+
+def allow_loopback_port(port: int) -> None:
+    """Called by the llama-server adapter for the port of the server it started."""
+    with _lock:
+        _allowed_ports.add(port)
 
 
 class _GuardedSocket(socket.socket):
     def connect(self, address):
-        _check(self.family, address)
+        _check_connect(self.family, address)
         return super().connect(address)
 
     def connect_ex(self, address):
-        _check(self.family, address)
+        _check_connect(self.family, address)
         return super().connect_ex(address)
 
     def bind(self, address):
-        _check(self.family, address)
-        return super().bind(address)
+        _check_bind(self.family, address)
+        super().bind(address)
+        if self.family != _AF_UNIX:
+            allow_loopback_port(self.getsockname()[1])
 
     def sendto(self, data, *args):
-        _check(self.family, args[-1])
+        _check_connect(self.family, args[-1])
         return super().sendto(data, *args)
 
+    def sendmsg(self, buffers, ancdata=(), flags=0, address=None):
+        if address is not None:
+            _check_connect(self.family, address)
+            return super().sendmsg(buffers, ancdata, flags, address)
+        return super().sendmsg(buffers, ancdata, flags)
 
-def _getaddrinfo(host, *args, **kwargs):
-    if host is not None and not _local(None, host):
-        raise NetworkRefused(f"name lookup refused: {host!r}")
-    return _real_getaddrinfo(host, *args, **kwargs)
+
+def _name_guard(name):
+    real = _real[name]
+
+    def guarded(host, *args, **kwargs):
+        if host is not None and not _loopback(_host(host)):
+            raise NetworkRefused(f"{name} refused by the network guard: {host!r}")
+        return real(host, *args, **kwargs)
+    return guarded
 
 
 def install_network_guard() -> None:
     """First statement of every process entry point, before any other import."""
-    socket.socket = _GuardedSocket          # type: ignore[misc]
-    socket.getaddrinfo = _getaddrinfo       # type: ignore[assignment]
+    socket.socket = _GuardedSocket                       # type: ignore[misc]
+    for name in _real:
+        setattr(socket, name, _name_guard(name))
 ```
 
-It refuses connections, binds, datagrams and name lookups outside this machine, and
-allows loopback and Unix sockets, which `multiprocessing`, `asyncio` and the `llama-server`
-Alternative need. It is Python-level only: a socket opened by native code is not seen
-(rule §4.6).
+What it covers, by API of the `socket` module:
+
+| Refused | Allowed |
+|---|---|
+| `connect`, `connect_ex`, `sendto`, `sendmsg` to any address that is not loopback | Unix sockets |
+| Loopback ports this process did not bind and the `llama-server` adapter did not register (`allow_loopback_port`) — another local service could relay outside | Loopback ports this process bound itself: `socketpair` on Windows is built that way, and `asyncio` uses it |
+| `bind` to any address that is not loopback | `multiprocessing` pipes |
+| `getaddrinfo`, `gethostbyname`, `gethostbyname_ex`, `gethostbyaddr`, `getnameinfo` for any host that is not loopback | Names and addresses of this machine |
+
+It is Python-level only: native code, and code that imports `_socket` directly, are not
+seen (rule §4.6).
 
 ## 5. Child processes (rule §4.1, §4.4)
 
 `adapters/children.py`. Two shapes: `run_once` for a parser, one document per process;
 `ModelChild` for the model, one process that lives across requests. Both create their
-pipes and process inside the `try` whose `finally` stops them, so a failure at any point
-after creation cleans up.
+pipes and process inside the `try` whose cleanup stops them, the child's pipe ends
+included; the cleanup itself never raises, so a failure in `Process.start()` surfaces as
+itself (Verified).
 
 ```python
 import multiprocessing as mp
@@ -209,27 +261,47 @@ class RequestFailed(Exception):
 
 
 def _stop(proc) -> None:
-    if proc is not None and proc.is_alive():
-        proc.terminate()
-        proc.join(2)
+    """Never raises: it runs in cleanup paths, where it must not hide the first error."""
+    if proc is None:
+        return
+    try:
         if proc.is_alive():
-            proc.kill()
+            proc.terminate()
             proc.join(2)
+            if proc.is_alive():
+                proc.kill()
+                proc.join(2)
+    except Exception:  # noqa: BLE001 — a process that never started, or already reaped
+        pass
 
 
-def _receive(conn, proc, deadline, *, interval, watched=None, mem_limit=None):
-    """Wait for one message; raise ChildFailed on time, death, or memory."""
+def _close(*conns) -> None:
+    for conn in conns:
+        if conn is not None:
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+
+def _receive(conn, proc, deadline, *, interval, watched=None, rss_limit=None):
+    """Wait for one message; raise ChildFailed on time, death, or memory.
+
+    Limits are checked once per interval: a message that arrives up to one interval
+    after the deadline is still accepted, and memory can pass rss_limit between checks.
+    """
     while True:
         if conn.poll(interval):
             try:
                 return conn.recv()
             except EOFError:  # the child died: a closed pipe polls as readable
+                proc.join(interval)
                 raise ChildFailed(f"exited with {proc.exitcode}") from None
         if not proc.is_alive():
             raise ChildFailed(f"exited with {proc.exitcode}")
-        if mem_limit is not None:
+        if rss_limit is not None:
             try:
-                if watched.memory_info().rss > mem_limit:
+                if watched.memory_info().rss > rss_limit:
                     raise ChildFailed("memory limit")
             except psutil.NoSuchProcess:
                 raise ChildFailed("exited") from None
@@ -239,7 +311,7 @@ def _receive(conn, proc, deadline, *, interval, watched=None, mem_limit=None):
 
 # --- one-shot child: a parser, one document per process -----------------------
 
-def run_once(target, payload, *, timeout, mem_limit, interval=0.2):
+def run_once(target, payload, *, timeout, rss_limit, interval=0.2):
     """Run target(conn, payload) in a new child and return the one message it sends."""
     ctx = mp.get_context("spawn")
     proc = recv = send = None
@@ -252,14 +324,12 @@ def run_once(target, payload, *, timeout, mem_limit, interval=0.2):
         watched = psutil.Process(proc.pid)
         deadline = time.monotonic() + timeout
         result = _receive(recv, proc, deadline, interval=interval,
-                          watched=watched, mem_limit=mem_limit)
+                          watched=watched, rss_limit=rss_limit)
         proc.join(interval)
         return result
     finally:
         _stop(proc)
-        for conn in (recv, send):
-            if conn is not None:
-                conn.close()
+        _close(recv, send)
 
 
 # --- long-lived child: the model ---------------------------------------------
@@ -275,19 +345,21 @@ class ModelChild:
 
     def start(self) -> None:
         ctx = mp.get_context("spawn")
+        child_in = child_out = None
         try:
             child_in, self._to_child = ctx.Pipe(duplex=False)
             self._from_child, child_out = ctx.Pipe(duplex=False)
             self._proc = ctx.Process(target=self._target,
                                      args=(child_in, child_out, *self._args), daemon=True)
             self._proc.start()
-            child_in.close()
-            child_out.close()
+            _close(child_in, child_out)
+            child_in = child_out = None
             deadline = time.monotonic() + self._load_timeout
             if _receive(self._from_child, self._proc, deadline,
                         interval=self._interval) != ("ready",):
                 raise ChildFailed("no ready message")
         except BaseException:
+            _close(child_in, child_out)
             self.stop()
             raise
 
@@ -321,9 +393,7 @@ class ModelChild:
 
     def stop(self) -> None:
         _stop(self._proc)
-        for conn in (self._to_child, self._from_child):
-            if conn is not None:
-                conn.close()
+        _close(self._to_child, self._from_child)
         self._proc = self._to_child = self._from_child = None
 
 
@@ -348,6 +418,8 @@ def serve(inbox, outbox, load, answer):
             outbox.send(("error", repr(exc)))
 ```
 
+- Limits are checked once per `interval`: a message that arrives within one interval
+  after the deadline is still accepted, and memory can pass `rss_limit` between checks.
 - `ChildFailed`: the child hung, died, or passed the memory limit; it has been stopped,
   and the next `request` starts a new one. `RequestFailed`: the model raised for one
   request; the child keeps running.
@@ -378,18 +450,22 @@ def model_main(inbox, outbox, chat_path, embed_path):
     serve(inbox, outbox, load, answer)
 ```
 
-The parser child's entry point. The memory limit is polled by `run_once` on every OS; on
-Linux the child also sets it as a hard limit with `resource`, which works there in a
-`spawn` child (Verified). Windows has no standard-library equivalent, and macOS was not
-checked.
+The parser child's entry point. Two different memory limits:
+
+- `rss_limit`: resident memory, polled by `run_once` on every OS.
+- `address_space_limit`: Linux only, set by the child with `resource.RLIMIT_AS` as a hard
+  cap on virtual address space, so a runaway allocation fails in the child before the
+  next poll. It is not a resident-memory limit: libraries reserve address space they never
+  touch, so it is set well above `rss_limit` — the ADR records both and the documents they
+  were tried on. Windows has no standard-library equivalent; macOS was not checked.
 
 ```python
 def parse_main(conn, payload):
     install_network_guard()
-    data, parse, max_chars, mem_limit = payload  # parse: a module-level function
+    data, parse, max_chars, address_space_limit = payload  # parse: module-level function
     if sys.platform == "linux":
         import resource
-        resource.setrlimit(resource.RLIMIT_AS, (mem_limit, mem_limit))
+        resource.setrlimit(resource.RLIMIT_AS, (address_space_limit, address_space_limit))
     text = parse(data)
     if len(text) > max_chars:
         conn.send(("error", f"text over {max_chars} characters"))
@@ -443,7 +519,14 @@ holds the cause, and `SELECT load_extension('x')` is refused (loading switched o
 Tests for §5 use fake `target`, `load` and `answer` functions in a test module: a parser
 that hangs, exits, returns too much text, and allocates past the limit; a model answer
 that hangs, exits, raises, and streams normally, with a cancel after the first chunk and
-a request after each failure.
+a request after each failure; and an argument that cannot be pickled, so that
+`Process.start()` fails and the original error surfaces with nothing left open.
+
+Tests for §4 call each API in its table directly — the refused ones with an outside
+address or name and with a loopback port opened by another process, the allowed ones
+with loopback ports this process bound, `socketpair`, `ssl`, an `asyncio` loop and a
+`spawn` pipe. A connection factory (`connect_args={"factory": ...}`) whose
+`enable_load_extension` raises tests the three paths of §3.
 
 ## 8. CI (rule §5.5)
 
@@ -476,7 +559,16 @@ answering (a closed pipe polls as readable and raises `EOFError`), and returns a
 child's result.
 `resource.setrlimit(RLIMIT_AS)` also works in a Linux spawn child.
 
-2026-11-16, same platform, the code of §4 and §5 as written: the guard allows a loopback
+2026-11-16 (second pass), same platform, the code of §3, §4 and §5 as now written:
+every refused API in §4's table refuses, including a loopback port opened by another
+process, and accepts it once registered; every allowed one works; `getfqdn` returns
+without a lookup. A `Process.start()` failure (unpicklable argument) surfaces as
+`PicklingError` with the process and pipes cleaned up. The loader keeps the connection
+when `enable_load_extension` is missing or raises, and fails it when switching off fails.
+The §1 compile command resolves `scikit-build-core 1.1.2`, `packaging 26.3`, `pathspec
+1.1.1`.
+
+2026-11-16 (first pass), same platform: the guard allows a loopback
 connection, `socketpair`, `ssl`, an `asyncio` loop and `spawn` with one-way and duplex
 pipes, and refuses an external IP, an external name, a bind to `0.0.0.0` and an external
 UDP send. `run_once` returns a normal parser's text and reports hang, memory and exit.

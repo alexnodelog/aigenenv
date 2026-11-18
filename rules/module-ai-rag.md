@@ -89,9 +89,9 @@ Additions to the archetype layout:
 - `DocumentSource` is the only code that opens a user document. Tests feed it fixtures; the
   allowed-folder check lives in it and nowhere else.
 - `tests/test_boundaries.py` also fails on `llama_cpp` imported outside
-  `adapters/model_child.py`, `sqlite_vec` imported from `domain/` or `application/`, and on any of `socket`, `urllib.request`, `http.client`,
-  `requests`, `httpx`, `aiohttp`, `huggingface_hub`, `PySide6.QtNetwork` imported anywhere
-  under `src/`. The exemptions: `adapters/netguard.py` imports `socket`, and with the
+  `adapters/model_child.py`, on `sqlite_vec` imported from `domain/` or `application/`,
+  and on any of `socket`, `_socket`, `urllib.request`, `http.client`, `requests`, `httpx`,
+  `aiohttp`, `huggingface_hub`, `PySide6.QtNetwork` imported anywhere under `src/`. The exemptions: `adapters/netguard.py` imports `socket`, and with the
   `llama-server` Alternative its adapter (`adapters/model_llamaserver.py`) MAY import
   `http.client`.
 - `*.gguf` is in `.gitignore`. No model file is committed, bundled into the installer, or
@@ -139,8 +139,8 @@ Additions to the archetype layout:
   refuses the file when the pasted value is empty or different. The computed hash is
   never accepted in place of the publisher's.
 - With the hash, the app records the file's size and modification time. Before each load
-  it compares both; if either differs, it computes the SHA-256 again on a worker and
-  refuses a file whose hash no longer matches. A change that keeps both — silent disk
+  it compares both; if either differs, it computes the SHA-256 again on a worker, showing
+  that it is checking the file, and refuses a file whose hash no longer matches. A change that keeps both — silent disk
   corruption — is not detected.
 - A model file is opened only as GGUF, and only by the runtime: the Default's child
   process, or `llama-server --model`. `Llama.from_pretrained`, `llama-server`'s download
@@ -176,8 +176,11 @@ Additions to the archetype layout:
   vectors in the same transaction, by explicit statements, tested (§8).
 - The total number of documents indexed and the number of chunks per document have
   limits recorded in `DECISIONS.md`. At either limit indexing stops for that document or
-  run and tells the user why. A write that fails — a full disk included — rolls back its
-  transaction, keeps the old entries, and stops the run.
+  run and tells the user why.
+- Before writing each document's entries, indexing checks the free space on the
+  database's disk and stops the run below a reserve recorded in `DECISIONS.md`, so the
+  rest of the app can still write. A write that fails anyway — a full disk included —
+  rolls back its transaction, keeps the old entries, and stops the run.
 - Every query against a `vec0` table is parameterized SQL in `adapters/vectors_sqlitevec.py`;
   vectors are bound with `sqlite_vec.serialize_float32`.
 
@@ -193,13 +196,16 @@ Additions to the archetype layout:
   the file in the app's process and passes the child its bytes, never a path. The child
   returns text only and never touches the database.
 - The child refuses to send text longer than a maximum number of characters. The worker
-  watches the child with a time limit and polls its resident memory with `psutil` at a
-  fixed interval; on Linux the child also sets the memory limit as a hard limit. The
-  limits and the interval are recorded in `DECISIONS.md`. On expiry, crash, oversized
-  output, or memory above the limit, it terminates the child and marks that document as
-  failed.
-- Polling is a mitigation, not a hard cap: memory can rise past the limit between two
-  polls. Outside Linux nothing stops that.
+  watches the child with a time limit and polls its resident memory (RSS) with `psutil`
+  against an RSS limit. On expiry, crash, oversized output, or RSS above the limit, it
+  terminates the child and marks that document as failed.
+- Both limits are checked once per polling interval: a result arriving within one interval
+  after the time limit is still accepted, and RSS can pass its limit between two polls.
+  On Linux the child also sets an address-space limit (`RLIMIT_AS`), which fails a
+  runaway allocation at once. It limits virtual address space, not RSS, so it is a
+  separate, higher value. Outside Linux nothing stops memory between polls.
+- The time, character, RSS and address-space limits and the interval are recorded in
+  `DECISIONS.md`.
 - A parser that starts processes of its own is not adopted.
 - Out of scope: a process that can already write to the allowed folders or to a model file
   — a symlink swapped after the path check, a file replaced after its hash was computed.
@@ -236,19 +242,24 @@ This section is the floor every such app keeps.
 
 ### 4.6 No network
 
-- No connection leaves the machine. The only socket the product may open is the
-  `llama-server` Alternative's connection to 127.0.0.1, from its adapter alone. A
-  dependency that can download — a model hub client, a parser's optional fetcher — has
-  that path disabled in code.
+- No connection leaves the machine, and none reaches another local service, which could
+  relay it outside. The app's own code opens only one kind of network connection: the
+  `llama-server` Alternative's adapter, to the port of the server it started. A dependency
+  that can download — a model hub client, a parser's optional fetcher — has that path
+  disabled in code.
 - At run time every process — the app and each child — installs the network guard as the
-  first statement of its entry point, before any other import. It refuses every
-  connection, bind, datagram and name lookup outside the machine, and allows loopback and
-  Unix sockets.
+  first statement of its entry point, before any other import. Through the `socket`
+  module's API it refuses: connections, datagrams and binds to any address that is not
+  loopback; connections to loopback ports the process did not bind itself, except the
+  port the `llama-server` adapter registers; and name lookups (`getaddrinfo`,
+  `gethostbyname`, `gethostbyname_ex`, `gethostbyaddr`, `getnameinfo`) for any host that
+  is not loopback. Unix sockets, `multiprocessing` pipes and sockets the process connects
+  to itself stay allowed.
 - Before release: the boundary check (§3) catches network libraries imported by the app's
   own code; the socket-blocked tests (§6) and `--self-check` (§5.3) catch Python code that
   opens a socket on the paths they run.
 - What none of these cover: native code — a parser or llama.cpp compromised by a crafted
-  file, a library's C extension. A child process isolates hangs, crashes and memory; it
+  file, a library's C extension — and code that imports `_socket` directly. A child process isolates hangs, crashes and memory; it
   is not a sandbox, and runs with the user's permissions. Against native code the
   protection is a PC with no network. Every new dependency is reviewed for network use
   before it is added, and the release is run once on a PC with no network before it is
@@ -339,10 +350,16 @@ Additions to the archetype's `--self-check`, in its temp directory, with no mode
 - Every call that needs confirmation is tested three ways: before confirmation nothing
   changes; after confirmation exactly the shown targets change; after refusal nothing
   changes. The targets shown are the targets the executor acts on.
-- The network guard is tested: an outside address, an outside name and a bind to all
-  interfaces are refused; loopback and `spawn` pipes still work.
-- The index limits are tested: indexing stops at the document and chunk limits, and a
-  write that fails mid-document keeps the old entries.
+- The network guard is tested by calling each API it covers directly: every refused case
+  of §4.6, including a loopback port opened by another process; and what stays allowed —
+  a loopback port the process bound, the registered `llama-server` port, `socketpair`,
+  `ssl`, `asyncio`, `spawn` pipes.
+- Child-process cleanup is tested with a start that fails inside `Process.start()`: the
+  original error surfaces, and no process or pipe is left open.
+- sqlite-vec loading is also tested with a `sqlite3` that cannot load extensions: the
+  connection stays usable and the index features report it.
+- The index limits are tested: indexing stops at the document and chunk limits and below
+  the disk reserve, and a write that fails mid-document keeps the old entries.
 - The model-file check is tested: an unchanged file loads without rehashing; a changed size
   or modification time triggers a rehash, and a changed hash refuses the load.
 - `tests/model/` is excluded from the default run and from CI. The human runs it before a
