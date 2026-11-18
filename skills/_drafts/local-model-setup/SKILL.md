@@ -1,6 +1,6 @@
 ---
 name: local-model-setup
-description: Add llama-cpp-python and sqlite-vec to a pc-app-python project, pin their build dependencies, load sqlite-vec on each connection, extend --self-check, the test setup and CI. Use when adding the AI/RAG module to a project, upgrading llama-cpp-python or sqlite-vec, switching to a GPU build, or editing pyproject.toml's build constraints, tests/model/conftest.py or the self-check.
+description: Add llama-cpp-python and sqlite-vec to a pc-app-python project, pin their build dependencies, load sqlite-vec on each connection, run the model and parsers in watched child processes, extend --self-check, the test setup and CI. Use when adding the AI/RAG module to a project, upgrading llama-cpp-python or sqlite-vec, switching to a GPU build, or editing pyproject.toml's build constraints, tests/model/conftest.py, the self-check, or the code that starts the model or parser child process.
 ---
 
 # local-model-setup (draft)
@@ -15,7 +15,7 @@ here. This draft leaves `_drafts/` only when the Unverified list at the end is e
 
 1. Confirm the C compiler the archetype already requires: `gcc --version`, `clang
    --version`, or on Windows the VS Build Tools C++ workload.
-2. `uv add "llama-cpp-python==<version>" "sqlite-vec==<version>"` and
+2. `uv add "llama-cpp-python==<version>" "sqlite-vec==<version>" "psutil==<version>"` and
    `uv add --dev pytest-socket`. Exact versions only.
 3. Starting list: `uv pip compile` of `scikit-build-core[pyproject]`. Then do a clean build
    with verbose output (step 5 with `-v`). The packages installed into the build
@@ -87,6 +87,10 @@ def install_vec_loader(engine, status: VecStatus) -> None:
             dbapi_conn.enable_load_extension(False)
 ```
 
+`status.error` is only ever set, never cleared: a later connection that loads the
+extension leaves it as it is, so a pool with a failed connection keeps the index features
+off until the app restarts.
+
 `AttributeError`: this Python's `sqlite3` has no extension support. `OperationalError`:
 loading not authorised, or the extension file not loadable. Either way the connection
 stays usable, extension loading is off again, and `status.error` keeps the cause for the
@@ -108,7 +112,71 @@ SELECT chunk_id, distance FROM chunk_vectors
 WHERE embedding MATCH :query AND k = :k
 ```
 
-## 4. Self-check additions (rule §5.3)
+## 4. Child processes (rule §4.1, §4.4)
+
+The model child and the parsing child are watched the same way: a `spawn` context, a
+one-way pipe, a time limit, and — for parsing — a memory limit polled with psutil.
+
+```python
+import multiprocessing as mp
+import time
+
+import psutil
+
+
+class ChildFailed(Exception):
+    pass
+
+
+def run_child(target, payload, *, timeout, mem_limit=None, interval=0.2):
+    """Run target(conn, payload) in a child; return its result or raise ChildFailed."""
+    ctx = mp.get_context("spawn")
+    recv, send = ctx.Pipe(duplex=False)
+    proc = ctx.Process(target=target, args=(send, payload), daemon=True)
+    proc.start()
+    send.close()
+    watched = psutil.Process(proc.pid)
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            if recv.poll(interval):
+                try:
+                    result = recv.recv()
+                except EOFError:  # the child died: a closed pipe polls as readable
+                    raise ChildFailed(f"exited with {proc.exitcode}") from None
+                proc.join(interval)
+                return result
+            if not proc.is_alive():
+                raise ChildFailed(f"exited with {proc.exitcode}")
+            if mem_limit is not None:
+                try:
+                    if watched.memory_info().rss > mem_limit:
+                        raise ChildFailed("memory limit")
+                except psutil.NoSuchProcess:
+                    raise ChildFailed("exited") from None
+            if time.monotonic() > deadline:
+                raise ChildFailed("time limit")
+    finally:
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(2)
+            if proc.is_alive():
+                proc.kill()
+                proc.join(2)
+        recv.close()
+```
+
+For parsing, `payload` is the file's bytes from `DocumentSource`, and the child stops and
+sends an error once its text passes the character limit. The model child is long-lived
+rather than one call per request: the same polling loop wraps each read of a streamed
+chunk, with the deadline reset per chunk, and a failure terminates the child so the next
+request starts a new one.
+
+`target` is a module-level function in its own module (`adapters/model_child.py`, the
+parser modules), because `spawn` imports it in the child. The app's entry point calls
+`multiprocessing.freeze_support()` first, for the packaged build.
+
+## 5. Self-check additions (rule §5.3)
 
 These run wherever the archetype's `--self-check` runs, the packaged build included
 (`pyside-release`). Inside it, before the window opens and before any other import of
@@ -135,15 +203,17 @@ def _block_sockets() -> None:
 
 `socket.socket` is replaced by a subclass, not a function: `ssl` subclasses it on import,
 and a function there makes `import ssl` fail with `TypeError`. This is a Python-level
-guard only — it does not see native code or a child process (rule §4.6). The self-check
-starts no child process.
+guard only — it does not see native code (rule §4.6). A child process does not inherit it,
+so the model child's entry point calls `_block_sockets()` too when started by the
+self-check.
 
-Then: `import llama_cpp` (this loads its shared library) and print
-`llama_cpp.__version__`; open the temp database through the normal `Engine`, fail if
+Then: start the model child through §4 with no model and have it send
+`llama_cpp.__version__` (this loads its shared library in the packaged build); open the
+temp database through the normal `Engine`, fail if
 `VecStatus.error` is set, print `vec_version()`, create a `vec0` table with dimension 3,
 insert one vector, search for it, and fail if it is not returned.
 
-## 5. Test setup (rule §6)
+## 6. Test setup (rule §6)
 
 Merge into the archetype's existing pytest settings; do not replace them. Add
 `--disable-socket -m 'not model'` to the existing `addopts`, and the `model` entry to the
@@ -163,17 +233,21 @@ markers = [
 missing. Autouse, so no model test can skip it by not requesting it; a fixture, not a
 module-level check, so the default run, which deselects these tests, does not fail on
 collection. The human runs them with `uv run pytest -m model -rs tests/model/` and copies
-the summary line into the release task's report.
+the summary line into the release task's report. With the `llama-server` Alternative, its
+adapter's tests run with `--allow-hosts=127.0.0.1` added to that command; the
+`--disable-socket` from `addopts` stays, and every other address is still refused.
 
 Tests for §3, with `sqlite_vec.load` replaced by a function that raises
 `sqlite3.OperationalError`: a connection still opens, `SELECT 1` works, `VecStatus.error`
 holds the cause, and `SELECT load_extension('x')` is refused (loading switched off again).
 
-## 6. CI (rule §5.5)
+## 7. CI (rule §5.5)
 
-- `ci.yml` builds the CPU Default only. It MAY cache the built llama-cpp-python wheel; the
-  cache key includes the OS, the architecture, the Python version and the hash of
-  `uv.lock` (which pins llama-cpp-python and the build constraints).
+- `ci.yml` builds the CPU Default only, with `CMAKE_ARGS` unset. It MAY cache the built
+  llama-cpp-python wheel; the cache key includes the OS, the architecture, the runner
+  image version (`$ImageOS` and `$ImageVersion` on GitHub-hosted runners), the Python
+  version and the hash of `uv.lock` (which pins llama-cpp-python and the build
+  constraints).
 - GPU builds are never cached and are not in `ci.yml`. A GPU ADR that wants CI adds a
   separate job for its declared OS and toolkit, running §2 steps 2–3.
 - `release.yml` restores no cache and compiles in every OS job.
@@ -190,6 +264,15 @@ load failure — connection open, `SELECT 1` works, `load_extension` refused aft
 refused; the function-replacement form makes `import ssl` raise `TypeError`.
 `llama_supports_gpu_offload` present in llama-cpp-python 0.3.36 (source).
 
+2026-11-15, same platform: pytest-socket with `--disable-socket --allow-hosts=127.0.0.1` —
+a loopback connection succeeds, an external one is refused; `--disable-socket` alone
+refuses both. A §4-style loop with psutil 7.2.2 ends a child that hangs (time limit) and
+one that allocates past the limit (memory limit), reports one that exits without
+answering (a closed pipe polls as readable and raises `EOFError`), and returns a normal
+child's result.
+`resource.setrlimit(RLIMIT_AS)` also works in a Linux spawn child, but is not used because
+it does not cover Windows.
+
 ## Unverified
 
 - macOS: whether a uv-managed Python's `sqlite3` can load extensions. Sources disagree.
@@ -202,3 +285,5 @@ refused; the function-replacement form makes `import ssl` raise `TypeError`.
 - Which line of uv's verbose build output lists the build-environment packages (§1,
   step 3).
 - pytest-socket together with pytest-qt's offscreen `QApplication`.
+- `spawn` child processes in the `pyside6-deploy` build, with `freeze_support()`.
+- `$ImageVersion` on every GitHub-hosted OS image the project uses.

@@ -687,12 +687,12 @@ no network at all.
 | Category | Default | Alternative | Prohibited |
 |---|---|---|---|
 | Archetype | `pc-app-python` | — | A local model inside a web archetype |
-| Model runtime | llama-cpp-python, in the app's own process | llama.cpp `llama-server`, started and stopped by the app, bound to 127.0.0.1, a new random API key per launch | A resident daemon (Ollama); a server bound to any address but 127.0.0.1; a runtime's built-in model download |
+| Model runtime | llama-cpp-python in a child process the app starts (`multiprocessing` spawn), talking over pipes, no port | llama.cpp `llama-server`, started and stopped by the app, bound to 127.0.0.1, a new random API key per launch, its binary bundled in the installer | The model in the app's own process or thread; a resident daemon (Ollama); a server bound to any address but 127.0.0.1; a runtime's built-in model download |
 | llama-cpp-python install | Built from the PyPI source distribution, CPU, hash in `uv.lock` | A GPU build; a prebuilt wheel from the project's own wheel index, declared as an explicit uv index | Any other third-party wheel or fork |
 | Model files | GGUF chosen by the user; path and SHA-256 recorded in the app's database | — | Pickle-based weights (`.bin`, `.pt`, `.pth`, `.pkl`); `trust_remote_code`; a model name or path fixed in code |
 | Embeddings | A GGUF embedding model on the same runtime | — | A second runtime for embeddings only (sentence-transformers, PyTorch) |
 | Vector store | sqlite-vec inside the app's SQLite file, exact version pinned | — | A vector database server (Qdrant, Chroma, Milvus); sqlite-vss; vectors in a file separate from the documents they index (FAISS index files) |
-| Document parsing | One parser per file type the app reads, chosen by ADR in the first project that needs it: runs offline, locked in `uv.lock` | — | A parser that calls a service; OCR or conversion through a hosted API |
+| Document parsing | One parser per file type the app reads, chosen by ADR in the first project that needs it: runs offline, locked in `uv.lock`; run in a child process whose time, output and memory (psutil) are limited | — | A parser that calls a service or starts processes of its own; OCR or conversion through a hosted API |
 | Ingestion / chunking | Project-owned code | — | A framework adopted for a single pipeline |
 | Orchestration | None | LangChain or LlamaIndex, with a recorded reason: core package plus local integrations only, every model, embedding and store default set explicitly in code | Their hosted-service integrations |
 
@@ -713,11 +713,14 @@ file read passes through the one place that enforces the allowed folders.
 A product that calls a hosted model is outside this module. The first project that needs
 one decides it by ADR and edits this section.
 
-**Why in-process.** No port is opened, so nothing else on the machine — or on a network the
-PC later joins — can reach the model. The package is locked in `uv.lock` with its hash
-like any other dependency. The costs: support for a new model architecture arrives only
-when the binding updates its bundled llama.cpp, and a crash in native code takes the app
-down with it.
+**Why a child process without a port.** No port is opened, so nothing else on the machine
+— or on a network the PC later joins — can reach the model. A native call cannot be
+interrupted from Python, and a token limit is not a time limit: a driver or native hang
+would leave a worker thread that never ends. In a child process, a hang or a crash ends
+only that process, which the app terminates and starts again. The package is locked in
+`uv.lock` with its hash like any other dependency. The costs: reloading the model after a
+restart, a few dozen lines of process handling, and support for a new model architecture
+arriving only when the binding updates its bundled llama.cpp.
 
 **Why built from source.** PyPI ships only a source distribution; prebuilt wheels come
 from a separate index. Building from PyPI keeps one package index and one trust anchor.
@@ -965,7 +968,7 @@ session on every host the plugin claims to support.
 |---|---|---|
 | Model files (GGUF) | Disk — AI/RAG | Multi-gigabyte. Downloaded on the online machine, carried to the offline PC, SHA-256 checked there |
 | CUDA toolkit / GPU drivers | System — AI/RAG, optional | CPU inference works; GPU is a speed choice. A GPU build of llama-cpp-python needs the matching toolkit at build time |
-| llama-cpp-python, sqlite-vec | Project dependencies | Locked in `uv.lock` |
+| llama-cpp-python, sqlite-vec, psutil | Project dependencies | Locked in `uv.lock` |
 | zizmor | CI only — Deployment | Run with `uvx zizmor==<version>`; the version is pinned in the workflow |
 | Gitleaks binary | CI only — Deployment | Tagged release, version and SHA-256 recorded in `DECISIONS.md` |
 

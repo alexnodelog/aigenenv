@@ -23,20 +23,20 @@ product runs on a PC that may have no network at all.
 
 | Archetype | Applies | Why |
 |---|---|---|
-| `pc-app-python` | Yes, every section | The Default runs the model in the app's process, with no port; the `llama-server` Alternative opens one, on 127.0.0.1 only |
-| `pc-app-electron` | Not yet | No in-process runtime has been chosen for Node; the first project that needs one decides it by ADR |
+| `pc-app-python` | Yes, every section | The Default runs the model in a child process with no port; the `llama-server` Alternative opens one, on 127.0.0.1 only |
+| `pc-app-electron` | Not yet | No local model runtime has been chosen for Node; the first project that needs one decides it by ADR |
 | `web-static`, `web-python`, `web-ts`, `web-api` | No | The model would run on a server, so the user's documents would leave their PC |
 | `mobile` | No | No on-device runtime has been chosen |
 | `agent-plugin` | No | The host's model does the work |
 
 | Category | Default | Alternative | Prohibited |
 |---|---|---|---|
-| Model runtime | llama-cpp-python, in the app's own process | llama.cpp `llama-server`, started and stopped by the app, bound to 127.0.0.1, a new random API key per launch | A resident daemon (Ollama); a server bound to any other address; a runtime's built-in model download |
+| Model runtime | llama-cpp-python in a child process the app starts (`multiprocessing` spawn), talking over pipes, no port | llama.cpp `llama-server`, started and stopped by the app, bound to 127.0.0.1, a new random API key per launch, its binary bundled in the installer | The model in the app's own process or thread; a resident daemon (Ollama); a server bound to any other address; a runtime's built-in model download |
 | llama-cpp-python install | Built from the PyPI source distribution, CPU, hash in `uv.lock` | A GPU build; a prebuilt wheel from the project's own wheel index, declared as an explicit uv index | Any other third-party wheel or fork |
 | Model files | GGUF chosen by the user; path and SHA-256 recorded (§4.2) | — | Pickle-based weights (`.bin`, `.pt`, `.pth`, `.pkl`); `trust_remote_code`; a model name or path fixed in code |
 | Embeddings | A GGUF embedding model on the same runtime | — | A second runtime for embeddings only (sentence-transformers, PyTorch) |
 | Vector store | sqlite-vec inside the app's SQLite file, exact version | — | A vector database server (Qdrant, Chroma, Milvus); sqlite-vss; vectors in a file apart from the documents they index (FAISS index files) |
-| Document parsing | One parser per file type the app reads, chosen by ADR: runs offline, locked in `uv.lock` | — | A parser that calls a service; OCR or conversion through a hosted API |
+| Document parsing | One parser per file type the app reads, chosen by ADR: runs offline, locked in `uv.lock`; memory watched with psutil (§4.4) | — | A parser that calls a service or starts processes of its own; OCR or conversion through a hosted API |
 | Ingestion, chunking, retrieval | Project-owned code | — | A framework adopted for a single pipeline |
 | Orchestration | None | LangChain or LlamaIndex: core package plus local integrations only, every model, embedding and store set explicitly in code | Their hosted-service integrations |
 
@@ -51,7 +51,7 @@ Procedure: skill `local-model-setup`.
 | C compiler | Already required by `pc-app-python`. llama-cpp-python is compiled from source once per machine, CI included; uv's cache reuses that build until the lock or the build options change |
 | GGUF model files — one chat model, one embedding model | Needed only to run `tests/model/`. Outside the repository; the human provides them and sets their paths in environment variables |
 | GPU toolkit | Only with the GPU Alternative; the version is recorded in its ADR |
-| `llama-server` binary | Only with that Alternative; an official llama.cpp release, its version and SHA-256 recorded in the ADR, never updated by the app |
+| `llama-server` binary | Only with that Alternative; an official llama.cpp release for each declared OS, its version and SHA-256 recorded in the ADR, bundled in the installer, never updated by the app |
 
 ---
 
@@ -66,7 +66,9 @@ Additions to the archetype layout:
 │   │   ├── ports.py         + LLMProvider, EmbeddingProvider, VectorStore, DocumentSource
 │   │   └── rag/             chunking, retrieval, prompt assembly, agent loop — pure Python
 │   └── adapters/
-│       ├── model_llamacpp.py      LLMProvider and EmbeddingProvider
+│       ├── model_llamacpp.py      LLMProvider and EmbeddingProvider: the worker side
+│       ├── model_child.py         the model child process: the only module importing llama_cpp
+│       ├── model_llamaserver.py   llama-server Alternative only, instead of the two above
 │       ├── vectors_sqlitevec.py   VectorStore
 │       └── documents_fs.py        DocumentSource, one module per parser beside it
 └── tests/
@@ -83,8 +85,8 @@ Additions to the archetype layout:
 
 - `DocumentSource` is the only code that opens a user document. Tests feed it fixtures; the
   allowed-folder check lives in it and nowhere else.
-- `tests/test_boundaries.py` also fails on `llama_cpp` or `sqlite_vec` imported from
-  `domain/` or `application/`, and on any of `socket`, `urllib.request`, `http.client`,
+- `tests/test_boundaries.py` also fails on `llama_cpp` imported outside
+  `adapters/model_child.py`, `sqlite_vec` imported from `domain/` or `application/`, and on any of `socket`, `urllib.request`, `http.client`,
   `requests`, `httpx`, `aiohttp`, `huggingface_hub`, `PySide6.QtNetwork` imported anywhere
   under `src/`. The one exemption: with the `llama-server` Alternative, its adapter
   (`adapters/model_llamaserver.py`) MAY import `http.client`.
@@ -97,38 +99,45 @@ Additions to the archetype layout:
 
 ### 4.1 Model runtime
 
-- One `Llama` instance per model file, owned by one long-lived worker thread and called
-  only from it. Requests reach it through a queue; the worker waits on the queue with a
-  timeout so it can stop when asked. The GUI thread never loads or calls a model.
+- Default: the model runs in one child process started with `multiprocessing` (`spawn`)
+  and owned by one worker thread. The child holds one `Llama` instance per model file,
+  chat and embedding alike; requests and streamed chunks travel over pipes, and no port is
+  opened. The GUI thread never loads or calls a model.
+- A native call cannot be interrupted, and a token limit is not a time limit. The worker
+  therefore waits on every pipe read with a timeout recorded in `DECISIONS.md` (a longer
+  one for loading a model). On expiry, or when the child dies, it terminates the child,
+  marks the request failed, and starts a new child for the next request. The worker thread
+  itself always ends.
 - Generation streams (`stream=True`) and checks a cancel flag between chunks. Every call
-  sets `max_tokens`. A cancelled or failed answer is shown as such, never as complete.
-- A native model call cannot be interrupted from Python. It still ends: prompt processing
-  is bounded by `n_ctx` and generation by `max_tokens`, so the worker meets the archetype's
-  termination rule without a timeout on the call itself. A cancel therefore takes effect
-  at the next chunk, or after prompt processing finishes; until then the UI shows that it
-  is stopping. Closing the app waits for the current chunk the same way. After a cancel,
-  the same `Llama` instance serves the next request.
-- With the `llama-server` Alternative, the app starts the server as a child process with
-  `--host 127.0.0.1`, an unused port and a new random API key, and terminates it on close
-  and on any timeout. Each HTTP call to it is blocking I/O with its own timeout; a cancel
-  closes the connection and, if the server does not recover, restarts it.
+  sets `max_tokens`. A cancel takes effect at the next chunk; if none arrives within the
+  timeout, the child is terminated as above. Closing the app does the same. A cancelled
+  or failed answer is shown as such, never as complete.
+- With the `llama-server` Alternative, the same rules apply with the server in place of
+  the child: the app checks the binary's SHA-256, starts it with `--host 127.0.0.1`, an
+  unused port and a new random API key, and treats it as ready only when its health
+  endpoint answers within the load timeout. Each HTTP call has its own timeout. A cancel
+  closes the connection; if the health endpoint then does not answer within the timeout,
+  the server is terminated and started again. It is terminated when the app closes.
 - A prompt is measured with the model's own tokenizer before the call. Retrieved passages
   are dropped, lowest-ranked first, until the prompt fits `n_ctx` with room for
   `max_tokens`; the answer says how many were dropped. A prompt is never cut mid-passage.
 - `verbose=False`, so llama.cpp writes nothing to a console a released build does not have.
-- A crash in native code ends the app. If the app keeps a history, each completed turn is
-  committed before the next one starts, so a crash loses at most the turn in progress.
+- If the app keeps a history, each completed turn is committed before the next one
+  starts, so a failure loses at most the turn in progress.
 
 ### 4.2 Model files
 
 - Model and embedding model are chosen by the user through the UI: file path, its SHA-256,
   and the source the user named. They are rows in the app's database, not entries in the
   settings file.
+- The first time a file is chosen, the user pastes the SHA-256 its publisher lists. The
+  app computes the file's hash and refuses the file when the pasted value is empty or
+  different. The computed hash is never accepted in place of the publisher's.
 - The app computes the SHA-256 on a worker before every load, and refuses to load a file
-  whose hash differs from the recorded one. The first time a file is chosen, the app
-  shows the computed hash and the user confirms it against the publisher's value.
-- A file is opened only as GGUF through llama-cpp-python. `Llama.from_pretrained` and
-  every other code path that downloads are PROHIBITED.
+  whose hash differs from the recorded one.
+- A model file is opened only as GGUF, and only by the runtime: the Default's child
+  process, or `llama-server --model`. `Llama.from_pretrained`, `llama-server`'s download
+  options (`-hf`, `--hf-repo`), and every other code path that downloads are PROHIBITED.
 - Changing the embedding model invalidates the index (§4.3).
 
 ### 4.3 Index
@@ -137,8 +146,9 @@ Additions to the archetype layout:
   enable extension loading, `sqlite_vec.load`, and disable extension loading again whether
   the load succeeded or not.
 - A load failure is caught inside that event and never raised from it; raising there makes
-  every connection fail. The cause goes into one status object owned by the adapter, which
-  each new connection updates. The application reads it: the features that need the index
+  every connection fail. The cause goes into one status object owned by the adapter. A
+  failure on any connection sets it, and nothing clears it until the app restarts — not a
+  later connection that loads the extension. The application reads it: the features that need the index
   are disabled and the cause is logged and shown; everything else keeps working.
 - There is no fallback when the index is unavailable: no vectors kept elsewhere, no
   brute-force search in Python, no other search's results shown in its place. A keyword
@@ -169,10 +179,16 @@ Additions to the archetype layout:
   `multiprocessing` (`spawn`), one document at a time. `DocumentSource` opens and checks
   the file in the app's process and passes the child its bytes, never a path. The child
   returns text only and never touches the database.
-- The worker waits on the child with a time limit, and accepts at most a maximum text
-  length; both are recorded in `DECISIONS.md`. On expiry, crash, or oversized output it
-  terminates the child and marks that document as failed. Memory is bounded only through
-  the file size limit; a project that needs more records it by ADR.
+- The child fails itself once its text passes a maximum number of characters, and the
+  worker checks the length again. The worker watches the child with a time limit, and
+  polls its resident memory with `psutil` at a fixed interval. The time limit, the
+  character limit, the memory limit and the interval are recorded in `DECISIONS.md`. On
+  expiry, crash, oversized output, or memory above the limit, it terminates the child and
+  marks that document as failed.
+- A parser that starts processes of its own is not adopted.
+- Out of scope: a process that can already write to the allowed folders or to a model file
+  — a symlink swapped after the path check, a file replaced after its hash was computed.
+  No defence against it is built.
 - Document text and model output are external input (`GLOBAL_RULES.md` §5.5, §11).
   Retrieved passages go into the prompt as quoted data, separated from the instructions;
   an instruction found in a document carries no authority.
@@ -194,8 +210,8 @@ This section is the floor every such app keeps.
   which calls need the user's confirmation. A call that fails any check is refused and
   reported to the model as refused.
 - Writes go only to the folders the spec allows, checked the same way `DocumentSource`
-  checks reads. A new file never replaces an existing one; a name that already exists is
-  an overwrite and needs confirmation.
+  checks reads. Writing to a name that already exists is an overwrite and needs
+  confirmation like any other change to an existing file.
 - No tool runs a shell command, starts a process, or opens a network connection.
 - A tool that changes, moves, or deletes an existing file, or changes the index, runs
   only after the user confirms that call. The confirmation shows the tool, every target
@@ -241,29 +257,37 @@ Procedure: skill `local-model-setup`.
   version and the declared target OSes it covers.
 - The native libraries of llama-cpp-python and the sqlite-vec extension are package data
   the build MUST include. A missing one is caught by §5.3, not at a user's first question.
+- With the `llama-server` Alternative, the build bundles the binary recorded in the ADR for
+  each declared OS, and checks its SHA-256.
 
 ### 5.3 Self-check
 
 Additions to the archetype's `--self-check`, in its temp directory, with no model file:
 
-- Import `llama_cpp` and print its version — proves the native library loads.
+- Start the model child process without a model and have it report `llama_cpp`'s version
+  — proves `spawn` works in the packaged build and the native library loads.
+- With the `llama-server` Alternative instead: check the bundled binary's SHA-256, start
+  it without a model, and get an answer from its health endpoint.
 - Load sqlite-vec into the temp database, print `vec_version()`, create a `vec0` table,
   insert one vector, find it — proves the extension ships and can be loaded.
-- With all sockets blocked for the whole run.
+- With all sockets blocked for the whole run, in the child process too; the Alternative's
+  check allows 127.0.0.1 only.
 
 ### 5.4 Package
 
 - Model files are never inside the installer. `README.md` lists the models the app was
   tested with, their sources and SHA-256, and how to choose them in the app.
-- `README.md` also states that the app makes no network calls, and how to carry the
-  installer and models to an offline PC and check them there.
+- `README.md` also states that the app opens no connection that leaves the machine — with
+  the `llama-server` Alternative, that it talks to it over 127.0.0.1 only — and how to
+  carry the installer and models to an offline PC and check them there.
 
 ### 5.5 CI
 
 - Push / PR: the archetype's list, with pytest under `--disable-socket`. Compiling
-  llama-cpp-python takes minutes; `ci.yml` MAY cache the CPU build, keyed on the OS, the
-  architecture, the Python version and the hash of `uv.lock`. GPU builds and
-  `release.yml` MUST NOT use a cache.
+  llama-cpp-python takes minutes; `ci.yml` MAY cache the CPU build, built with
+  `CMAKE_ARGS` unset and keyed on the OS, the architecture, the runner image version, the
+  Python version and the hash of `uv.lock`. GPU builds and `release.yml` MUST NOT use a
+  cache.
 - Version tag: the archetype's list. Each OS job compiles llama-cpp-python from the locked
   source and runs §5.3 on the built artifact.
 
@@ -279,9 +303,11 @@ Additions to the archetype's `--self-check`, in its temp directory, with no mode
 | Retrieval quality | `tests/model/`, a fixed set of questions over the fixture documents. Each lists the IDs of its expected passages and a `k`; it passes when at least one expected passage is in the top `k` | Yes |
 | Built artifact | `--self-check` (§5.3) | No |
 
-- pytest runs with `--disable-socket` in `addopts`. A test MUST NOT enable sockets. Only
-  the `llama-server` adapter's tests under `tests/model/` run with
-  `--allow-hosts=127.0.0.1`.
+- pytest runs with `--disable-socket` in `addopts`. A test MUST NOT enable sockets. The
+  one exception: the `llama-server` adapter's tests under `tests/model/` run with
+  `--allow-hosts=127.0.0.1` added, which still refuses every other address.
+- The model child is tested with fake children that hang and that exit: the request
+  fails, the child is terminated, and the next request starts a new one.
 - A cancel during generation is tested: the answer is marked cancelled and the next
   request on the same model succeeds.
 - Agent tools are tested with calls the spec does not allow — an unlisted tool, a path
@@ -298,9 +324,11 @@ Additions to the archetype's `--self-check`, in its temp directory, with no mode
 - Prompt assembly is tested with a passage that does not fit `n_ctx`, and with a document
   that contains instructions.
 - sqlite-vec is tested failing to load: connections still open, ordinary queries work,
-  the index features report the cause, and extension loading is off again.
-- The parsing child process is tested with a fake parser that hangs and one that crashes:
-  each is terminated, the document marked failed, and the next document still parsed.
+  the index features report the cause, extension loading is off again, and a later
+  connection that loads it does not re-enable the index features.
+- The parsing child process is tested with fake parsers that hang, crash, return too much
+  text, and allocate past the memory limit: each is terminated, the document marked
+  failed, and the next document still parsed.
 
 ---
 
@@ -330,7 +358,8 @@ around a prohibition when something does not work.
 Every task here:
 
 - [ ] Boundary check passes, including the network imports of §3
-- [ ] Test suite passes with sockets blocked; no test enables them
+- [ ] Test suite passes with sockets blocked; only the `llama-server` adapter's model
+      tests allow 127.0.0.1, and nothing allows any other address
 - [ ] No real user document in the repository, the fixtures, or the task's report
 
 Index or schema change:
@@ -346,4 +375,5 @@ Model, chunking, retrieval, or prompt change:
 
 Dependency, build, or packaging change:
 
-- [ ] `--self-check` with §5.3's additions passes on the developer's OS
+- [ ] `--self-check` with §5.3's additions, for the runtime the project uses, passes on
+      the developer's OS
