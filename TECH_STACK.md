@@ -214,8 +214,10 @@ own settings needs a writer, and JSON is the stdlib one.
 `.db` file alone is not a consistent snapshot. `sqlite3.Connection.backup` is.
 
 **AppImage.** `appimagetool` turns the standalone directory into an AppImage. Pin a tagged
-release: the `continuous` release changes under the same URL. Licence not yet verified —
-check before first use.
+release: the `continuous` release changes under the same URL. `appimagetool` otherwise
+downloads the AppImage runtime from the `continuous` release at every build, so the
+runtime is pinned the same way: a dated release of `AppImage/type2-runtime`, passed with
+`--runtime-file`. Licence not yet verified — check before first use..
 
 ### 5.2 PC App — Electron
 
@@ -860,7 +862,7 @@ a separate Python installation.
 | nuitka, ordered-set, zstandard, patchelf | Project `build` group, locked | Installed by `uv sync --group build`; patchelf on Linux only. Never left to `pyside6-deploy` to install |
 | Inno Setup | System — Windows only | Installer packaging |
 | Qt runtime libraries | System — Linux only | `libxcb-cursor0`, `libxkbcommon-x11-0`, `libegl1`, `libgl1`; absent on minimal distros and server images. Qt 6.5+ will not start without `libxcb-cursor0` |
-| `appimagetool` | System — Linux only | Tagged release, version and SHA-256 recorded in `DECISIONS.md`. Not needed if the project ships `.tar.gz` |
+| `appimagetool` and the AppImage runtime | System — Linux only | Tagged release of `appimagetool`, plus the runtime from a dated release passed with `--runtime-file`; versions and SHA-256 of both recorded in `DECISIONS.md`. Not needed if the project ships `.tar.gz` |
 
 The C toolchain is the single most common cause of a first build failing on a fresh
 machine. Nothing in `uv sync` reveals that it is missing.

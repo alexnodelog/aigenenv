@@ -45,7 +45,7 @@ archetype), or if there is no window (a script).
 | C compiler | System. Windows: VS Build Tools (C++). macOS: Xcode CLT. Linux: gcc or clang |
 | Nuitka and its helpers | Project `build` dependency group, locked (§5.1) |
 | Inno Setup (`iscc`) | System, Windows only |
-| `appimagetool` | System, Linux only, unless the ADR chose `.tar.gz`. A tagged release, never `continuous`; version and SHA-256 recorded in `DECISIONS.md` |
+| `appimagetool` and the AppImage runtime | System, Linux only, unless the ADR chose `.tar.gz`. A tagged release of `appimagetool`, never `continuous`, plus the runtime from a dated release passed with `--runtime-file`; versions and SHA-256 of both recorded in `DECISIONS.md` |
 | Qt system libraries: `libxcb-cursor0`, `libxkbcommon-x11-0`, `libegl1`, `libgl1` | System, Linux only |
 
 ---
