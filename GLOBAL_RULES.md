@@ -142,7 +142,9 @@ not happen is prevented — by a hook, a failing check, or a stop — not advise
 before the next one begins is too large.
 
 **Inspect the environment before acting on it.** Check what is installed, which version,
-which path, which permissions. Never assume a tool, file, or directory exists.
+which path, which permissions. Never assume a tool, file, or directory exists. When an
+installed tool's major version differs from the one the project's rules name, stop and
+report before using it: the rules' syntax may no longer apply.
 
 **Write for the operator.** Define a term they may not know in a clause. When an action
 can be undone, say how; when it cannot, say so before doing it.
