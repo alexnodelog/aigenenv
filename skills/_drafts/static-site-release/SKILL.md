@@ -1,196 +1,339 @@
-# static-site-release (draft)
+---
+name: static-site-release
+description: Set up the toolchain, create the project skeleton (vite.config.ts, wrangler.jsonc, public/_headers, version.txt, tsconfig files), write the smoke test, configure CI, and deploy or roll back a web-static site on Cloudflare Workers. Use when creating a web-static project, editing vite.config.ts, astro.config.mjs, wrangler.jsonc, pnpm-workspace.yaml, public/_headers or tests/smoke/, when pnpm install fails with ERR_PNPM_IGNORED_BUILDS, when a CI workflow is added or changed, or when cutting, checking or rolling back a release.
+---
 
-Procedure extracted from `rules/web-static.md` §2 and §5. Draft for step 7: frontmatter
-(`name`, `description`) is added then. Items marked **[verify]** were not confirmed against
-current tool documentation when this was written.
+# static-site-release
 
-## 1. Machine setup
+Procedures for `rules/web-static.md` §2 and §5. The pnpm version is always the one in
+`package.json` `packageManager`; `<v>` below stands for it.
 
-1. Install pnpm standalone, first — it does not need Node.
-   - macOS / Linux: `curl -fsSL https://get.pnpm.io/install.sh | sh -`
-   - Windows (PowerShell): `Invoke-WebRequest https://get.pnpm.io/install.ps1 -UseBasicParsing | Invoke-Expression`
-   - **[verify]** both commands, and how to install the exact `packageManager` version.
-   - Check: `pnpm --version` equals the `packageManager` version.
-2. Node is not installed separately. `package.json` declares it:
+## 1. Machine setup (rule §2)
+
+1. Install pnpm standalone, first. It needs no Node.
+   - macOS / Linux: `curl -fsSL https://get.pnpm.io | PNPM_VERSION=<v> sh -`
+   - Windows (PowerShell): `$env:PNPM_VERSION='<v>'; iwr https://get.pnpm.io/ps1 -useb | iex`
+   - Open a new terminal. Check: `pnpm --version` prints `<v>`.
+2. Node is not installed separately. `package.json` declares an exact LTS version:
+
    ```json
    "devEngines": {
-     "runtime": { "name": "node", "version": "<LTS version>", "onFail": "download" }
+     "runtime": { "name": "node", "version": "<exact LTS version>", "onFail": "download" }
    }
    ```
-   `pnpm install` downloads that Node. **[verify]** accepted version syntax (exact vs range).
-   Check: `pnpm exec node --version`.
-3. `pnpm install`. If it stops on an install-script error, add only the named package to
-   `allowBuilds` in `pnpm-workspace.yaml`, after confirming why it needs a script.
-4. `pnpm exec playwright install chromium` — once per machine; tests then run offline.
 
-## 2. Project skeleton (walking skeleton, first week)
+   `pnpm install` downloads it. Check: `pnpm exec node --version`.
+3. `pnpm install`. If it fails with `ERR_PNPM_IGNORED_BUILDS`, follow §2.3.
+4. `pnpm exec playwright install chromium`, once per machine; tests then run offline. On a
+   network that blocks `cdn.playwright.dev` this step fails: report it; do not switch the
+   tests to jsdom.
 
-- `vite.config.ts` — build input and test projects:
+## 2. Project skeleton
+
+Before any feature beyond it, the skeleton — `index.html`, `404.html`, `_headers` — is
+deployed to the real host (rule §5.2).
+
+### 2.1 Dependencies
+
+```
+pnpm add -D -E vite vitest @vitest/browser-playwright playwright tailwindcss @tailwindcss/vite typescript @biomejs/biome wrangler @types/node
+pnpm exec biome init
+```
+
+### 2.2 `package.json` scripts
+
+```json
+"scripts": {
+  "build": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.lib.json && vite build",
+  "test": "vitest run --project lib --project ui",
+  "test:smoke": "vitest run --project smoke"
+}
+```
+
+`test:smoke` runs only after `pnpm build`.
+
+### 2.3 `pnpm-workspace.yaml`
+
+Start with `allowBuilds: {}`. pnpm fails the install when a dependency's install script
+is neither allowed nor denied. For each package `ERR_PNPM_IGNORED_BUILDS` names:
+
+- Deny it (`false`) unless the site fails without its script. With the dependencies of
+  §2.1, wrangler brings `esbuild` and `workerd`; neither is needed to build or deploy an
+  assets-only site:
+
+  ```yaml
+  allowBuilds:
+    esbuild: false
+    workerd: false
+  ```
+
+- Allow it (`true`) only after confirming why it needs a script, and say so in the commit
+  message.
+
+### 2.4 `pages.ts` and `vite.config.ts`
+
+`pages.ts` is the one list of pages; the build and the smoke test both import it.
+
+```ts
+// pages.ts
+export const pages = ["index.html", "404.html"]; // add every page here
+```
+
+```ts
+// vite.config.ts
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import tailwindcss from "@tailwindcss/vite";
+import { playwright } from "@vitest/browser-playwright";
+import type { Plugin } from "vite";
+import { defineConfig } from "vitest/config";
+import { pages } from "./pages.ts";
+
+const root = import.meta.dirname;
+const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf-8"));
+
+function versionFile(): Plugin {
+  return {
+    name: "version-file",
+    apply: "build",
+    generateBundle() {
+      this.emitFile({ type: "asset", fileName: "version.txt", source: `${pkg.version}\n` });
+    },
+  };
+}
+
+export default defineConfig({
+  base: "/",
+  plugins: [tailwindcss(), versionFile()],
+  build: {
+    rolldownOptions: {
+      input: Object.fromEntries(pages.map((p) => [p, resolve(root, p)])),
+    },
+  },
+  test: {
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "lib",
+          environment: "node",
+          include: ["tests/lib/**/*.test.ts", "tests/boundaries.test.ts"],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "ui",
+          include: ["tests/ui/**/*.test.ts"],
+          browser: {
+            enabled: true,
+            headless: true,
+            provider: playwright(),
+            instances: [{ browser: "chromium" }],
+          },
+        },
+      },
+      {
+        extends: true,
+        test: { name: "smoke", environment: "node", include: ["tests/smoke/**/*.test.ts"] },
+      },
+    ],
+  },
+});
+```
+
+Use `import.meta.dirname`, not `__dirname`, and keep the `.ts` extension on local
+imports: Vite warns that the other forms break under its upcoming native config loader.
+
+### 2.5 TypeScript
+
+- `tsconfig.json`: `"strict": true`, `"module": "ESNext"`, `"moduleResolution": "bundler"`,
+  `"noEmit": true`, `"allowImportingTsExtensions": true`, `"lib": ["ES2023", "DOM"]`,
+  `"types": ["vite/client", "node"]`; includes `src`, `tests`, `vite.config.ts`, `pages.ts`.
+- `tsconfig.lib.json`: the same compiler options except `"lib": ["ES2023"]`,
+  `"types": []`; `"include": ["src/lib"]`.
+
+### 2.6 Styles and pages
+
+- `src/styles/app.css`: `@import "tailwindcss";`
+- Each HTML file links `/src/styles/app.css` and loads its one `src/entry/<page>.ts` with
+  `<script type="module" src>`.
+- A UI test loads the real page:
+
   ```ts
-  import { defineConfig } from "vitest/config";
+  import html from "../../about/index.html?raw";
+  import { mount } from "../../src/ui/about";
+
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  document.body.innerHTML = doc.body.innerHTML; // test setup only, never in src/
+  mount(document);
+  ```
+
+### 2.7 `wrangler.jsonc`
+
+```jsonc
+{
+  "name": "<site-name>",
+  "account_id": "<account id>",
+  "compatibility_date": "<today>",
+  "workers_dev": true,
+  "preview_urls": false,
+  "assets": {
+    "directory": "./dist",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page"
+  }
+}
+```
+
+No `main`. `workers_dev` and `preview_urls` are written out even though they are
+wrangler's defaults, so a changed default cannot publish preview uploads.
+
+### 2.8 `public/_headers`
+
+`connect-src 'none'` until the site fetches something, then exactly those origins:
+
+```
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+```
+
+Vite's build emits no inline script or style, so the policy needs no relaxation.
+
+### 2.9 Check the skeleton
+
+`pnpm build`, then `pnpm test:smoke`, then `pnpm exec wrangler deploy --dry-run`. It needs
+no account and lists the files it would upload.
+
+## 3. Astro variant
+
+- `pnpm create astro` with the minimal template. No adapter.
+- `astro.config.mjs`:
+
+  ```js
+  import { readFileSync, writeFileSync } from "node:fs";
+  import { fileURLToPath } from "node:url";
   import tailwindcss from "@tailwindcss/vite";
-  import { playwright } from "@vitest/browser-playwright";
-  import { resolve } from "node:path";
+  import { defineConfig } from "astro/config";
 
-  const pages = ["index.html", "404.html"]; // add every page here
+  const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf-8"));
 
-  export default defineConfig({
-    base: "/",
-    plugins: [tailwindcss()],
-    build: {
-      rolldownOptions: {
-        input: Object.fromEntries(pages.map((p) => [p, resolve(__dirname, p)])),
+  const versionFile = {
+    name: "version-file",
+    hooks: {
+      "astro:build:done": ({ dir }) => {
+        writeFileSync(fileURLToPath(new URL("version.txt", dir)), `${pkg.version}\n`);
       },
     },
-    test: {
-      projects: [
-        {
-          extends: true,
-          test: {
-            name: "lib",
-            environment: "node",
-            include: ["tests/lib/**/*.test.ts", "tests/boundaries.test.ts"],
-          },
-        },
-        {
-          extends: true,
-          test: {
-            name: "ui",
-            include: ["tests/ui/**/*.test.ts"],
-            browser: {
-              enabled: true,
-              headless: true,
-              provider: playwright(),
-              instances: [{ browser: "chromium" }],
-            },
-          },
-        },
-        {
-          extends: true,
-          test: { name: "smoke", environment: "node", include: ["tests/smoke/**/*.test.ts"] },
-        },
-      ],
-    },
+  };
+
+  export default defineConfig({
+    output: "static",
+    build: { inlineStylesheets: "never" },
+    integrations: [versionFile],
+    vite: { plugins: [tailwindcss()] },
   });
   ```
-  **[verify]** Vitest 4 `projects` and browser-provider syntax.
-- `package.json` scripts, so the standard test command never depends on build state:
-  `"test": "vitest run --project lib --project ui"`,
-  `"test:smoke": "vitest run --project smoke"` (run only after `pnpm build`).
-- UI test loading a real page: `import html from "../../about/index.html?raw"`, put its
-  `<body>` into `document.body`, then call the page's `mount()`. **[verify]** `?raw` on
-  HTML files in browser mode.
-- `src/styles/app.css`: `@import "tailwindcss";`
-- `version.txt`: a small Vite plugin (`generateBundle` → `emitFile`) writes
-  `package.json` `version`. **[verify]** hook name under Rolldown.
-- `tsconfig.lib.json`: `"include": ["src/lib"]`, `"lib": ["ES2023"]`, `"types": []`.
-- `wrangler.jsonc`:
-  ```jsonc
-  {
-    "name": "<site-name>",
-    "compatibility_date": "<today>",
-    "assets": {
-      "directory": "./dist",
-      "html_handling": "auto-trailing-slash",
-      "not_found_handling": "404-page"
-    }
-  }
-  ```
-  No `main`. **[verify]** whether to set `workers_dev` / `preview_urls` explicitly.
-- `public/_headers` (template; `connect-src 'none'` until the site fetches something, then
-  exactly those origins — `'self'` only for same-origin fetches):
-  ```
-  /*
-    Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'
-    X-Content-Type-Options: nosniff
-    Referrer-Policy: strict-origin-when-cross-origin
-  /assets/*
-    Cache-Control: public, max-age=31536000, immutable
-  ```
-  **[verify]** whether Vite's build output needs any `style-src` relaxation.
-- First deploy of the skeleton follows §4, then the human opens the `*.workers.dev` URL.
 
-### Astro variant
-
-- `pnpm create astro` with the minimal template; output stays static (no adapter).
-- Tailwind through `vite.plugins` in `astro.config.mjs`. **[verify]**
+  `inlineStylesheets: "never"` is required: by default Astro inlines small stylesheets as
+  `<style>`, which the CSP blocks.
 - Scripts: `"check": "astro check && tsc --noEmit -p tsconfig.lib.json"`,
-  `"build": "astro build"`; output goes to `dist/`, so `wrangler.jsonc`, `_headers`,
-  smoke test and CI stay as above.
-- Vitest reads Astro's config through `getViteConfig` from `astro/config` in
-  `vitest.config.ts`; same three projects. **[verify]**
-- `version.txt` comes from an Astro integration hook or a post-build script. **[verify]**
+  `"build": "astro build"`. Output goes to `dist/`, so §2.7, §2.8, §6 and §7 stay as they
+  are.
+- `vitest.config.ts` reads Astro's config:
 
-## 3. Cloudflare account and token
+  ```ts
+  import { getViteConfig } from "astro/config";
+  export default getViteConfig({ test: { projects: [/* the three projects of §2.4 */] } });
+  ```
 
-1. Create a free Cloudflare account; note the account ID (an identifier, not a secret).
-2. Create an API token with only the permission needed to deploy Workers on that account.
-   **[verify]** exact permission name (Account → Workers Scripts → Edit).
-3. Add `CLOUDFLARE_API_TOKEN` as a GitHub Actions secret — the only secret. Put the account
-   ID in `wrangler.jsonc` (`account_id`) or a GitHub Actions variable. List the token in
-   `.env.example` with a placeholder; never in any committed file.
+## 4. Cloudflare account and token
+
+1. Create a free Cloudflare account. Copy the account ID into `wrangler.jsonc`; it is an
+   identifier, not a secret.
+2. Create a custom API token: permission **Account → Workers Scripts → Edit**, account
+   resources limited to this one account. Do not use the "Edit Cloudflare Workers"
+   template: it grants more than an assets-only deploy needs.
+3. Add `CLOUDFLARE_API_TOKEN` as a GitHub Actions secret. It is the only secret. List it in
+   `.env.example` with a placeholder.
 4. Do not connect the repository to Cloudflare's Git builds.
+5. If a deploy fails with `Authentication error [code: 10000]`, stop and report the API path
+   the error names. Do not widen the token without the human.
 
-## 4. CI workflow
+## 5. CI workflow
 
-- Every workflow sets `permissions: contents: read` at the top; nothing needs more.
-- On push / PR:
-  1. checkout
-  2. set up pnpm from `packageManager` — no separate Node setup step; pnpm installs Node from
-     `devEngines.runtime`. **[verify]** current action (`pnpm/setup` v2 for pnpm 11+) and
-     whether it runs the runtime download.
-  3. `pnpm install --frozen-lockfile`
-  4. `pnpm exec playwright install --with-deps chromium` (cache the browser directory)
-  5. `pnpm exec biome ci .`
-  6. `pnpm exec tsc --noEmit -p tsconfig.json && pnpm exec tsc --noEmit -p tsconfig.lib.json`
-  7. `pnpm exec vitest run --project lib --project ui`
-  8. `pnpm build`
-  9. `pnpm exec vitest run --project smoke`
-- On tag `v*`: all of the above, then
-  1. fail if the tag ≠ `v` + `package.json` `version`, or if the tagged commit is not on
-     `main` (`git merge-base --is-ancestor <sha> origin/main`, after fetching `main`)
-  2. `pnpm exec wrangler deploy`, the token set in `env:` of this step only — never at
-     workflow or job level
-  3. post-deploy check (§5)
-  4. on any failure: stop, report, no retry, no redeploy. A failed post-deploy check means
-     the wrong site may be live: the report names the failed check and the rollback command
-     (§6), and the human decides.
-- Optional: a repository ruleset that lets only the owner create or move `v*` tags.
+Every `uses:` is pinned to a full commit SHA with the tag as a comment. Look the SHA up with
+`git ls-remote https://github.com/<owner>/<action> refs/tags/<tag>^{}`.
 
-## 5. Post-deploy check
+```yaml
+permissions:
+  contents: read
+```
 
-Against the deployed URL:
+On push / PR:
 
-- `GET /version.txt` → body equals the tag's version
-- `GET /` → 200
-- `GET /<random-string>/` → 404 and a non-empty HTML body
-- `GET /` → `Content-Security-Policy` value equals the `/*` entry in `dist/_headers`
+1. `actions/checkout`
+2. `pnpm/setup` (v3): installs the pnpm of `packageManager` and the Node of
+   `devEngines.runtime`. Set `install: false`; the next step installs.
+3. `pnpm install --frozen-lockfile`
+4. `pnpm exec playwright install --with-deps chromium`
+5. `pnpm exec biome ci .`
+6. `pnpm build` (runs both type checks)
+7. `pnpm test`
+8. `pnpm test:smoke`
 
-A verifier that fails intermittently is suspected before the host: test it against a
+On tag `v*`, all of the above, then:
+
+1. Fail if the tag is not `v` + `package.json` `version`, or if the tagged commit is not on
+   `main`: `git fetch origin main` then `git merge-base --is-ancestor <sha> origin/main`.
+2. `pnpm exec wrangler deploy`, with `CLOUDFLARE_API_TOKEN` in the `env:` of this step only.
+3. The checks of §6.
+4. On any failure: stop and report. No retry and no redeploy. A failed §6 check means the
+   wrong site may be live: the report names the failed check and the rollback command of
+   §7, and the human decides.
+
+## 6. Post-deploy check
+
+Against the URL `wrangler deploy` printed:
+
+- `GET /version.txt`: body equals the tag's version
+- `GET /`: 200
+- `GET /<random string>/`: 404 with a non-empty HTML body
+- `GET /`: the `Content-Security-Policy` value equals the `/*` entry in `dist/_headers`
+
+When the check fails intermittently, suspect the check before the host: run it against a
 known-good page.
 
-## 6. Rollback
+## 7. Rollback
 
-- `pnpm exec wrangler rollback` to the previous version, or re-run the tag workflow for the
-  previous tag.
-- After either, repeat §5 with the previous version number.
-- Note any URL renamed since that version: its `_redirects` line is gone with the rollback.
+Rolling back is deploying: the human approves it.
 
-## 7. Smoke test outline
+1. `pnpm exec wrangler deployments list` shows the versions.
+2. `pnpm exec wrangler rollback <version-id> -m "<reason>"`. Without an ID it returns to
+   the previous version. Or re-run the tag workflow for the previous tag.
+3. Repeat §6 with the previous version number.
+4. Report any URL renamed since that version: its `_redirects` line is gone with the
+   rollback.
 
-Reads `dist/` only; no server, no network.
+## 8. Smoke test outline
 
-1. Read the page list from the same `pages` array the build uses (export it from a shared
-   module). Astro: list `src/pages/`.
+`tests/smoke/`, reads `dist/` only; no server, no network.
+
+1. Read the page list from `pages.ts` (Astro: the files in `src/pages/`).
 2. Collect references: `href`, `src`, `srcset` from every built `.html`; `url(...)` and
    `@import` from every built `.css` (CSS paths resolve relative to the CSS file). Skip
-   `#…`, `data:`, `mailto:`, `tel:`. Fail on another origin; map `/x/` →
-   `dist/x/index.html` and `/a.css` → `dist/a.css`; fail if the file is missing.
-3. Fail on `<script>` without `src`, on any `on[a-z]+=` attribute.
-4. Parse the `/*` block in `dist/_headers`: each CSP directive the rule requires present
-   with its required value, no `'unsafe-inline'` or `'unsafe-eval'`, `nosniff`, and
+   `#…`, `data:`, `mailto:`, `tel:`. Fail on another origin. Map `/x/` to
+   `dist/x/index.html` and `/a.css` to `dist/a.css`; fail if the file is missing.
+3. Fail on a `<script>` without `src`, a `<style>` element, a `style=` attribute, or any
+   `on[a-z]+=` attribute. The CSP blocks all four, so the page would break silently.
+4. Parse the `/*` block of `dist/_headers`: every directive rule §4.4 requires, with its
+   required value; no `'unsafe-inline'` or `'unsafe-eval'`; `nosniff`;
    `Referrer-Policy: strict-origin-when-cross-origin`.
-5. Fail on any `*.map`, `.env*` or `*.md` file in `dist/`; run the project's secret scanner
+5. Fail on any `*.map`, `.env*` or `*.md` file in `dist/`. Run the project's secret scanner
    over `dist/`.
-6. Check `dist/version.txt`.
-7. Count files; fail above 20,000 or on any file above 25 MiB.
+6. `dist/version.txt` equals `package.json` `version`.
+7. Fail above 20,000 files or on any file above 25 MiB.
