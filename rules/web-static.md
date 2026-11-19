@@ -219,7 +219,7 @@ and exits 0 — or non-zero naming each failure. It checks that:
 - every page in the build input, and `404.html`, exists in `dist/`;
 - every local reference — `href`, `src`, `srcset` in built HTML; `url()` and `@import` in
   built CSS — resolves to a file in `dist/`;
-- no built HTML contains an inline `<script>` or an `on*=` attribute;
+- no built HTML contains an inline `<script>`, a `<style>` element, a `style=` attribute or an `on*=` attribute;
 - no URL on another origin appears in HTML `src`, `srcset` or `<link href>`, or in built
   CSS `url()` or `@import`;
 - `dist/_headers` sets every header and directive §4.4 requires, with its required value;
