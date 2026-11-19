@@ -34,6 +34,16 @@ like a backup.
 Install `pg_dump`, `pg_restore`, `psql` with a major version at or above the server's.
 Check: `pg_dump --version`, and `psql "$DIRECT_URL" -c 'SHOW server_version'`.
 
+### 1.4 age (apps whose data users cannot recreate)
+
+1. Install a tagged release of `FiloSottile/age` on the human's machine. In CI, download
+   the same release and check its SHA-256 against `DECISIONS.md` before it runs.
+2. Once, on the human's machine: `age-keygen -o backup-key.txt`. It prints the public key
+   (`age1…`). The file holds the private key: keep it on that machine and one offline copy,
+   never in the repository, CI or the backup store.
+3. Record the release, its SHA-256 and the public key in `DECISIONS.md`. Losing the private
+   key makes every backup unreadable; the ADR says where the offline copy is.
+
 ## 2. Stylesheet (Track B, rule §5.2)
 
 `assets/app.css`, with `@source` paths relative to this file:
@@ -234,19 +244,18 @@ On the human's machine, at the tag, with `DIRECT_URL` the database owner's **dir
 1. `git checkout v<version>` and `uv sync --locked`.
 2. Suspend the service on Render, and stop anything else that writes to the database.
    Check that the site no longer answers.
-3. Dump into encryption, so no plaintext file is written. The ADR names the encryption
-   tool and key; with `age`:
+3. Dump into encryption with the public key of §1.4, so no plaintext file is written:
 
    ```bash
    set -o pipefail
-   pg_dump --format=custom --no-owner "$DIRECT_URL" | age -r "<backup public key>" > backup-v<version>.dump.age
+   pg_dump --format=custom --no-owner "$DIRECT_URL" | age -r "<public key>" > backup-v<version>.dump.age
    ```
 
 4. Restore into an empty database (a new Neon branch, or a local PostgreSQL):
 
    ```bash
    set -o pipefail
-   age -d -i <private key file> backup-v<version>.dump.age | pg_restore --no-owner --no-acl --exit-on-error -d "$EMPTY_URL"
+   age -d -i backup-key.txt backup-v<version>.dump.age | pg_restore --no-owner --no-acl --exit-on-error -d "$EMPTY_URL"
    ```
 
    A non-zero exit stops the release: resume the service; it comes back on the old
@@ -268,11 +277,15 @@ Only for an app holding data its users cannot recreate.
 - PostgreSQL: a GitHub Actions workflow on a `schedule`. Install the PostgreSQL client at or
   above the server's major. `BACKUP_DATABASE_URL`, the direct URL, is set on the backup
   job's environment only.
-- In the same job, with `shell: bash`: dump into the encryption of §9 step 3; restore the
-  encrypted file into a PostgreSQL service container with `pg_restore --no-owner --no-acl
-  --exit-on-error`; fail unless its `alembic_version` equals production's and every table
-  the models define exists; upload the encrypted file to the store the ADR names. The
-  private key is never in CI or in the store.
+- CI holds only the public key, so it checks the dump before encrypting it. In the same
+  job, with `shell: bash`:
+  1. `pg_dump --format=custom --no-owner "$BACKUP_DATABASE_URL" > "$RUNNER_TEMP/db.dump"`
+  2. `pg_restore --no-owner --no-acl --exit-on-error` of that file into a PostgreSQL service
+     container; fail unless its `alembic_version` equals production's and every table the
+     models define exists.
+  3. `age -r "<public key>" -o "$RUNNER_TEMP/db.dump.age" "$RUNNER_TEMP/db.dump"`, then
+     upload `db.dump.age` to the store the ADR names.
+  4. Delete `$RUNNER_TEMP/db.dump` in a step with `if: always()`.
 - Failure notifications for a scheduled workflow go to the person who last changed its
   `cron` line, or who last re-enabled it. That person is the human who must receive them;
   record who in `DECISIONS.md`.
