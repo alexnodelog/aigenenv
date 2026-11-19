@@ -781,8 +781,14 @@ release: a workflow that only runs tests still executes third-party code with a 
 | Action updates | Dependabot, `github-actions` ecosystem, with a cooldown | — | Auto-merging update PRs |
 | Workflow check | zizmor, offline audits, pinned version | — | — |
 | Secret scan | Gitleaks CLI, tagged release binary, version and SHA-256 in `DECISIONS.md` | Betterleaks | gitleaks-action |
+| Backup encryption | age, tagged release binary, version and SHA-256 in `DECISIONS.md`; CI holds only the recipient public key | — | A passphrase or private key stored as a CI secret |
 | Release record | GitHub Release, immutable, drafted, assets and `SHA256SUMS` attached, then published | — | Assets added or replaced after publish |
 | Versioning | SemVer from Conventional Commits; the agent proposes the version, the human approves | — | semantic-release and any tool that tags or publishes on merge |
+
+**Why age for backups.** A backup job encrypts with a public key only, so neither CI nor
+the backup store holds anything that can decrypt; the private key stays with the human.
+age (BSD-3-Clause) is a single binary with no keyring or configuration, and it streams, so
+a dump never has to be written to disk as plaintext on the human's machine.
 
 **Why SHAs and not the lockfile.** Workflow lockfiles became generally available on all
 plans, Free included, on 28 October 2026, and they also pin the actions an action calls.
@@ -981,6 +987,7 @@ session on every host the plugin claims to support.
 | llama-cpp-python, sqlite-vec, psutil | Project dependencies | Locked in `uv.lock` |
 | zizmor | CI only — Deployment | Run with `uvx zizmor==<version>`; the version is pinned in the workflow |
 | Gitleaks binary | CI only — Deployment | Tagged release, version and SHA-256 recorded in `DECISIONS.md` |
+| age | System and CI — apps whose data users cannot recreate | Tagged release, version, SHA-256 and the backup public key recorded in `DECISIONS.md`. The private key stays on the human's machine with one offline copy |
 
 ### 9.11 OS build toolchain summary
 
