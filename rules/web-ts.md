@@ -99,8 +99,8 @@ Python libraries (`web-api`), or if one person uses it on one machine with local
   A client component that reaches any of them fails the build.
 - `adapters/db/migrate.ts` is the one exception to both rules above. It runs under plain
   Node, outside Next.js, so it has no `server-only` import, reads `DATABASE_URL` itself,
-  and imports only Drizzle's migrator and the two drivers. `pnpm db:migrate` and the
-  container run this same file.
+  and imports only Drizzle's migrator and the two drivers. `pnpm db:migrate` runs this
+  file; the container runs a bundle of it that esbuild builds in the image's build stage.
 - An app with no business rules MAY omit `domain/` and `services/`, and MUST NOT add them
   to match this layout. A new top-level dir needs an ADR only if it changes a row of the
   import table below.
@@ -286,14 +286,15 @@ Procedure: skill `next-web-release`.
 - The `Dockerfile` base image uses the Node major in `devEngines.runtime`, pinned by
   digest, and installs the pnpm version in `packageManager`. A moving tag makes the image
   built at release differ from the one CI tested.
-- `drizzle-kit`, the Better Auth CLI and the shadcn CLI are locked devDependencies, run
+- `drizzle-kit`, esbuild, the Better Auth CLI and the shadcn CLI are locked devDependencies, run
   with `pnpm exec`.
 
 ### 5.2 Build
 
 - `pnpm build` runs `tsc --noEmit` on both configs, then `next build`.
 - Tailwind v4 is configured in `src/app/globals.css` (`@import "tailwindcss";`) and loaded
-  through `@tailwindcss/postcss`.
+  through the `@tailwindcss/turbopack` loader in `next.config.ts`, as `create-next-app`
+  sets it up.
 - The image copies the standalone output together with `public/` and `.next/static/` —
   standalone output omits both — installs nothing at runtime, runs as a non-root user,
   sets `NEXT_TELEMETRY_DISABLED=1`, runs `migrate.ts` (if the app has a database), then

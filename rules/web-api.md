@@ -348,7 +348,8 @@ Procedure: skill `web-api-release`.
 - `pnpm build` runs `tsc --noEmit`, then `next build`, producing `out/`. `next.config.ts`
   sets `images.unoptimized`: the default image loader needs a server.
 - Tailwind v4 is configured in `src/app/globals.css` (`@import "tailwindcss";`) and loaded
-  through `@tailwindcss/postcss`.
+  through the `@tailwindcss/turbopack` loader in `next.config.ts`, as `create-next-app`
+  sets it up.
 - In development, the Next.js dev server forwards `/api/` and `/healthz` to the local
   backend. That forwarding exists only in development; the export contains none.
 - The image copies `out/` from the Node stage to `FRONTEND_DIR`, installs with
