@@ -173,6 +173,12 @@ from that branch and never change `state.md`, so a merge always keeps the target
 version; there is nothing to reconcile. The orchestrator is the only writer even when tasks
 run in parallel — each task has its own section in the one file.
 
+**Ending the session.** When a `PLAN.md` task reaches `done` and no other task is `spawned`
+or `reviewing`, the orchestrator stops and tells the human to end this session. The human
+starts a new session with `orchestrate`, which resumes from `state.md` as described under
+Resuming. It waits for running tasks because ending the session would end a subagent still
+working in it.
+
 **The plan** has its own status in `state.md`, separate from the tasks:
 
 | From | To | When | Human |
