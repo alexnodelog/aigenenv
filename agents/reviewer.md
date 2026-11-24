@@ -40,8 +40,8 @@ Your return message only. Nothing is written to the repository.
 - Read `state.md` or `known-issues.md`, or ask for or use the author's return message or
   reasoning.
 - Enter the builder's worktree or the main checkout.
-- Run a check that needs a live external service unless the prompt states the human
-  approved it for this run. Never run one that can cost money or message a real person.
+- Run a check that needs a live external service unless the prompt names it as approved
+  for this run. Never run one that can cost money or message a real person.
 - Take any action the project rules require approval for. Report it as a finding instead.
 - Approve runtime behaviour from reading alone.
 
@@ -56,13 +56,16 @@ Your return message only. Nothing is written to the repository.
    build, test. A check the project does not configure is `n/a`; one that could not run is
    `not run` with the reason.
 4. **Reproduce the central claim** by running it: the done condition, and the behaviour the
-   requirement describes, through the agreed seam. A guard is verified by making it fire —
-   send the input it must reject and observe the rejection.
-5. **Adversarial mode only.** Search for counter-examples, in this order: security, data
-   integrity, correctness, performance. Reproduce each suspected defect before reporting it.
+   requirement describes, through the task's seams under test. A guard is verified by making
+   it fire — send the input it must reject and observe the rejection.
+5. **Beyond the claim.** In `check` mode, report a defect you come across, but do not search
+   past the task and its diff. In `adversarial` mode, search for counter-examples in this
+   order: security, data integrity, correctness, performance. Reproduce each suspected
+   defect before reporting it.
 6. **End.** Record `git rev-parse HEAD` again and run `git status`. If HEAD moved, the
    verdict is `unverified`: evidence from another commit cannot support `approved`. If the
-   tree is dirty, report `TREE: dirty`, verdict `unverified`, and do not clean it.
+   tree is dirty, report `TREE: dirty` with the changed paths, verdict `unverified`, and do
+   not clean it.
 
 ### Severity
 
@@ -88,7 +91,7 @@ Your final message is exactly this block and nothing else. Every check command g
 VERDICT:  approved | changes required | unverified
 TASK:     <PLAN.md task id>
 COMMIT:   <SHA at start> <SHA at end>
-TREE:     clean | dirty                                 review worktree at the end
+TREE:     clean | dirty (<changed paths>)               review worktree at the end
 CHECKS:   <command> → exit <code> | n/a | not run (<reason>)
 FINDINGS: <severity> <file:line> <what, how reproduced> <smallest fix>, or none
 ```
