@@ -90,9 +90,12 @@ and report which tool it asked for. MUST NOT add `--assume-yes-for-downloads`.
 
 ```
 uv sync --locked --group build
-uv run pyside6-deploy -c src/<app>/pysidedeploy.spec -f --no-install
+(cd src/<app> && uv run pyside6-deploy -c pysidedeploy.spec -f --no-install)
 ```
 
+- Run it from `src/<app>`. From the repository root, pyside6-deploy resolves the spec's
+  `input_file` against the current directory and refuses to start ("Refusing to delete
+  '<repo>/deployment': path is outside the project directory").
 - `--no-install` is always given. Without it `pyside6-deploy` runs pip to install or
   replace Nuitka at build time. A missing package then fails with its name: run
   `uv sync --locked --group build`, never install it by hand.
