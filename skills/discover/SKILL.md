@@ -37,40 +37,70 @@ without asking anyone.
 # PRD: <name>
 
 ## Problem
-<what is wrong or missing today, for whom, in the human's terms>
+<what is wrong or missing today, for whom, and what they do instead now>
 
 ## Users
 - <who uses it, how often, on what device or setting>
 
 ## Requirements
-### R1: <one behaviour, one line>
+### R1: <one behaviour, as the user sees it>
 - Acceptance: <input or situation> → <expected result>; at least one worked example
 - Limits and errors: <input limits, error cases and what the user sees | none stated>
 
 ## Constraints
-- <stated by the human: where it runs, network, data it may hold, deadlines | none>
+- <stated by the human: where it runs, network, data it keeps, deadlines | none>
 
 ## Out of scope
-- <item> — <the human's reason | unanswered, YYYY-MM-DD>
+- <item> — not wanted | later | unanswered, YYYY-MM-DD
 
 ## Open questions
 - <question>
 ```
 
+- `PRD.md` is written in the language the human uses, so they approve what they can read.
+  Headings and requirement ids stay as in the template.
 - Requirement ids (`R1`, `R2`, …) are never reused or renumbered; the planner and every
   commit trace to them. A dropped requirement moves to `## Out of scope`.
 - Acceptance examples use concrete values. They are the source of the builder's expected
   results, so "works correctly" is not an example.
+- A quality the human wants — fast, easy, secure, reliable — is written with a number or
+  an example ("results within 2 seconds for 10,000 rows"), or not at all.
+- What the human wants later, not now, goes to `## Out of scope` as `later`. It returns
+  only through a new discover session.
 - `## Open questions` exists only while drafting. The file is not offered for approval
   until that section is gone.
 
 ## 4. Interview
 
 1. Write the draft from the request, putting every unknown under `## Open questions`. An
-   unknown is never filled with a plausible guess.
-2. Ask one question at a time, the ones that change scope first. Each question says why it
-   matters and, where there are options, what each would change. Never ask what §2 step 4
-   could look up.
+   unknown is never filled with a plausible guess. Check the request against each area
+   below and add a question for every one it leaves open:
+
+   | Area | What has to be known |
+   |---|---|
+   | Problem | What goes wrong today, and what the user does instead |
+   | Users | Who, how many, how often, on what device; whether they sign in |
+   | Core actions | What the user does, step by step, and what they get back |
+   | Data | What is entered, shown and kept; for how long; whether it must survive a reinstall; whether any of it is sensitive personal data |
+   | Where it runs | PC, browser or phone; with or without a network; who installs it |
+   | Outside services | Anything it sends to or receives from another system; any cost or message it can cause |
+   | Errors and edges | Empty input, wrong input, too much input, no network, a failed step halfway |
+   | Look | Existing screens, mockups or examples to follow, or none |
+   | Model answers | Only when the product answers with a model: how a right answer is judged, with example questions and expected answers |
+   | Not wanted | What it must not do, and what can wait |
+
+2. Ask one question at a time, the ones that change scope first. Never ask what §2 step 4
+   could look up. Give the human choices to pick from:
+
+   ```
+   <question> — <why it matters, one line>
+   A. <option> — <what it changes>
+   B. <option> — <what it changes>
+   C. Something else
+   Suggested: B, because <reason>.
+   ```
+
+   A free answer is accepted as well; the choices only make answering easier.
 3. Write each answer into `PRD.md` as soon as it is given, and remove the question. The
    session may end at any point.
 4. When the human cannot or will not answer, say that the item will be written as out of
