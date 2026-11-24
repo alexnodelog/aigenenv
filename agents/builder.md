@@ -18,9 +18,11 @@ All from the spawn prompt:
 - The task text: id, requirement, blocked by, file scope, seams under test, done condition.
 - The requirement it traces to.
 - The absolute worktree path and the check commands.
-- On a first spawn, `BASE` is the worktree's HEAD.
-- On rework: `BASE`, the HEAD of `task/<id>` to start from, and the reviewer's findings.
+- `BASE`. On a first spawn it is the worktree's HEAD.
+- On rework: the HEAD of `task/<id>` to start from, and the reviewer's findings.
+- On any respawn: the `BASELINE` recorded for this task.
 - After `BLOCKED` or `STRUCK_OUT`: the human's answer and every earlier attempt.
+- The live checks the human approved for this run, if any.
 
 Read the code in the task's file scope and what it calls. Nothing else is given to you, and
 you do not go looking for an earlier session's reasoning.
@@ -44,8 +46,8 @@ On `task/<id>` only: code, tests, and — in the commit that caused the change �
   rewriting history (amend, rebase, reset), pushing, merging, adding a dependency the task
   did not ask for. Return `BLOCKED` with the action in `NEEDS`.
 - Discard, stash, or reset changes you did not make. A dirty worktree at start is `BLOCKED`.
-- Run a check that needs a live external service unless the prompt states the human
-  approved it for this run. Never run one that can cost money or message a real person.
+- Run a check that needs a live external service unless the prompt names it as approved
+  for this run. Never run one that can cost money or message a real person.
 - Return `DONE` with uncommitted changes or untracked files in the worktree.
 
 ## Procedure
@@ -53,9 +55,9 @@ On `task/<id>` only: code, tests, and — in the commit that caused the change �
 1. **Confirm the environment.** `cd` to the worktree path. Confirm the branch is
    `task/<id>`, HEAD is the commit you were given, and `git status` is clean. Any mismatch
    is `BLOCKED`.
-2. **Baseline, once.** Run every check command at `BASE` and record what fails before you
-   change anything. On rework HEAD is past `BASE`: `git switch --detach <BASE>`, run the
-   checks, `git switch task/<id>`, and confirm HEAD is back on the given commit.
+2. **Baseline, once per task.** If the prompt gives a `BASELINE`, use it and do not measure
+   it again. If it gives none, HEAD must be `BASE`: run every check command and record what
+   fails before you change anything. No `BASELINE` with HEAD past `BASE` is `BLOCKED`.
 3. **Rework only.** Read `git diff BASE..HEAD` against each finding before changing anything.
 4. **Behaviour change: one test, then the least code.** Write one test that fails, run it and
    see it fail for the reason the requirement gives, write the least code that makes it pass,
@@ -88,12 +90,17 @@ STATUS:   DONE | BLOCKED | STRUCK_OUT
 TASK:     <PLAN.md task id>
 BASE:     <full SHA the branch started from>
 COMMIT:   <full SHA of task/<id> HEAD, or none>
-BASELINE: <checks failing at BASE before any change, or none>
+BASELINE: <checks failing at BASE before any change, or none>   the received value on a respawn
 CHECKS:   <command> → exit <code> | n/a | not run (<reason>)   one line per configured check
 NOT REACHED: <paths the checks did not cover, or none>
+NOTES:    <notify-tier changes, unrelated problems noticed, known-issues proposals, or none>
 NEEDS:    <the decision required>                       required when BLOCKED
 ATTEMPTS: <cause / change / observation>                required when STRUCK_OUT, one per attempt
 ```
 
 `NOT REACHED` names what the checks did not exercise — startup, a migration, a
 configuration, an external call. Do not claim a path works because nearby tests pass.
+
+`NOTES` carries what the project rules say to report rather than ask about: a change to the
+shape of a public interface or another notify-tier change, an unrelated problem you noticed
+and did not fix, and anything you think belongs in `known-issues.md`. One item per line.
