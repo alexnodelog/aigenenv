@@ -46,7 +46,7 @@ Three subagents, two main-session skills. Nothing else is an agent.
 |---|---|---|---|---|---|
 | `discover` | Skill, in an interactive session with the human | Discover | The request, existing `PRD.md`, code only to answer a factual question | `PRD.md`; its approval record in `state.md` | Writes code or `PLAN.md`; leaves an open question in `PRD.md` |
 | `orchestrate` | Skill, in the main session | Plan → Verify | `PRD.md`, `PLAN.md`, `state.md`, subagent return messages | `state.md`, `known-issues.md` | Edits code, tests, `PRD.md`, `PLAN.md`; forwards a builder's message to the reviewer; merges |
-| `planner` | Subagent | Plan | `PRD.md`, the code it needs to size tasks | `PLAN.md` | Writes code; adds a task with no requirement behind it |
+| `planner` | Subagent | Plan | `PRD.md`, `PLAN.md` when amending, the code it needs to size tasks | `PLAN.md` | Writes code; adds a task with no requirement behind it |
 | `builder` | Subagent, in a task worktree | Build | One `PLAN.md` task, its requirement, the code in scope | Code, tests, `DECISIONS.md`, `README.md`, `.env.example` — on its task branch | Touches `state.md`; widens scope; starts another task |
 | `reviewer` | Subagent, in a detached worktree at the commit under review | Verify | The task text, the diff range, the check commands, the repository at that commit | Nothing in the repository | Reads `state.md` or `known-issues.md`; fixes what it finds |
 
@@ -141,14 +141,20 @@ exists, it stops and asks.
 **Rework is always a fresh builder.** A builder that received `changes required` does not
 continue its old session. A `DONE` return already guarantees a clean worktree (§5), so the
 new builder starts from the committed HEAD of `task/<id>`. It gets the task, `BASE`, that
-HEAD, and the findings from `state.md` — not the previous builder's reasoning — and its first
-step is to read `BASE..HEAD` against the findings.
+HEAD, the first `BASELINE` recorded for the task, and the findings from `state.md` — not the
+previous builder's reasoning — and its first step is to read `BASE..HEAD` against the
+findings.
+
+**The baseline is measured once per task.** The first builder of a task measures it at
+`BASE`, and the orchestrator records it in `state.md`. Every later builder of that task
+receives that recorded `BASELINE` in its spawn prompt and does not measure it again. A
+builder that receives no `BASELINE` while HEAD is past `BASE` returns `BLOCKED`.
 
 **After STRUCK_OUT or BLOCKED.** The attempts stay in `state.md` under the task and cause,
 and the count does not reset with a new session. The worktree is kept. If it has uncommitted
 changes, the human decides whether they are committed or discarded; no agent discards them.
 A builder is respawned only with the human's answer or new direction recorded in `state.md`,
-and receives the earlier attempts.
+and receives that answer, the earlier attempts, and the recorded `BASELINE`.
 
 **Checks have no outside effects, by environment, not by instruction.** The machine agents
 run on holds no production credentials at all: production secrets live only in the hosting
@@ -159,7 +165,8 @@ confirms it once when setting up the machine, and that confirmation is part of t
 precondition at the top of this document.
 
 A check that needs a live external service is listed separately in `PLAN.md`, uses a test or
-sandbox account, and runs only with the human's approval for that run. It may read from and
+sandbox account, and runs only with the human's approval for that run, which the orchestrator
+records and passes in the spawn prompt. It may read from and
 write to that test account only. A check that can cost money or send a message to a real
 person is never run by an agent; the human runs it. A live check is never repeated
 automatically on resume; the human decides.
@@ -233,7 +240,7 @@ One writer per file at any moment. This is what makes parallel builders mergeabl
 | Code, tests | `builder`, on `task/<id>` only | |
 | `DECISIONS.md`, `README.md`, `.env.example` | `builder`, in the commit that caused the change | |
 | `state.md` | `orchestrate`; when no orchestrator is running, the single session that is — including the `discover` session recording the PRD approval | Committed only on the branch tasks merge into, at every transition. Task branches never change it |
-| `known-issues.md` | `orchestrate`, after the human decides to defer | Same branch as `state.md`. A subagent proposes, never writes |
+| `known-issues.md` | `orchestrate`, after the human decides to defer | Same branch as `state.md`. A subagent proposes — a builder in `NOTES`, a reviewer in `FINDINGS` — never writes |
 | Review verdict | Nobody writes a file | The orchestrator records it in `state.md`; the approved verdict line goes into the merge commit message the human makes |
 
 **A file outside scope.** A builder that needs to change a file outside its task's scope —
@@ -250,10 +257,17 @@ instead and why; the planner amends that task and the human approves the amendme
 
 ## 5. Spawn prompt and return message
 
-**Spawn prompt** (orchestrator → subagent) contains only: the task text from `PLAN.md`, the
-requirement it traces to, the file scope, the absolute worktree path, the check commands,
-and — for rework — the reviewer's findings. For the reviewer: the task text, the base and
-head commits, the mode, and the check commands. Never a summary of earlier sessions.
+**Spawn prompt** (orchestrator → subagent) contains only the items below, each taken from
+`PLAN.md`, `state.md`, or git. Never a summary of earlier sessions.
+
+| Role | Always | When it applies |
+|---|---|---|
+| `planner` | — (`PRD.md` is read from the repository root) | Amending: the task ids to amend and the reason. Respawn after `BLOCKED`: the human's recorded answer |
+| `builder` | The task text from `PLAN.md`, the requirement it traces to, the file scope, the absolute worktree path, the check commands, `BASE` | Rework: the HEAD of `task/<id>` to start from and the reviewer's findings. Any respawn: the first recorded `BASELINE`. Respawn after `BLOCKED` or `STRUCK_OUT`: the human's recorded answer and every earlier attempt |
+| `reviewer` | The task text, the base and head commits, the mode, the check commands, the absolute review worktree path | — |
+
+Any role that runs checks also receives the live checks the human approved for this run.
+A live check not named there is `not run`.
 
 **Return message** (subagent → orchestrator). One schema per role; nothing else in the
 message.
@@ -270,9 +284,10 @@ STATUS:   DONE | BLOCKED | STRUCK_OUT
 TASK:     <PLAN.md task id>
 BASE:     <full SHA the branch started from>
 COMMIT:   <full SHA of task/<id> HEAD, or none>
-BASELINE: <checks failing at BASE before any change, or none>
+BASELINE: <checks failing at BASE before any change, or none>   the received value on a respawn
 CHECKS:   <command> → exit <code> | n/a | not run (<reason>)   one line per configured check
 NOT REACHED: <paths the checks did not cover, or none>
+NOTES:    <notify-tier changes, unrelated problems noticed, known-issues proposals, or none>
 NEEDS:    <the decision required>                       required when BLOCKED
 ATTEMPTS: <cause / change / observation>                required when STRUCK_OUT, one per attempt
 ```
@@ -291,8 +306,8 @@ FINDINGS: <severity> <file:line> <what, how reproduced> <smallest fix>, or none
 missing a required field is `BLOCKED`. A reviewer message missing a field is `unverified`.
 
 **The orchestrator checks every return against git before recording it.** Builder: `COMMIT`
-exists and is the HEAD of `task/<id>`, `BASE` matches the recorded base, and on `DONE` the
-task worktree is clean. Reviewer: both
+exists and is the HEAD of `task/<id>`, `BASE` matches the recorded base, on a respawn
+`BASELINE` matches the recorded one, and on `DONE` the task worktree is clean. Reviewer: both
 commits equal the one it was given and `TREE` is clean. Planner: `PLAN.md` is the only
 changed file in the checkout. After a reviewer or planner returns, the main checkout and
 every task worktree have the HEAD and status they had before the spawn. Any mismatch makes
@@ -372,10 +387,13 @@ section, never by editing someone else's text.
   done condition a fresh session can check.
 - Asks nothing it can look up in the code. A question only the human can answer goes into
   its return as `BLOCKED`.
+- On `BLOCKED`, leaves `PLAN.md` exactly as it found it — absent or unchanged — so no
+  half-written plan is left uncommitted in the checkout.
 
 **builder**
-- Baseline, once, before the first change: runs the configured checks at `BASE` and reports
-  what already fails, so failures it did not cause are known.
+- Baseline, once per task, before the first change: the first builder runs the configured
+  checks at `BASE` and reports what already fails, so failures it did not cause are known.
+  A respawned builder uses the `BASELINE` in its prompt and does not measure it again.
 - Then, for a behaviour change: write one failing test, the least code that passes it,
   repeat. Never write all the new tests before any code.
 - Tests go through the agreed seam and assert behaviour, never internals. An expected value
@@ -389,6 +407,8 @@ section, never by editing someone else's text.
   follows `diagnose`.
 - A change that makes a decision needing a record adds it to `DECISIONS.md` in the same
   commit, following `adr`.
+- What the rules say to report rather than ask about — a notify-tier change, an unrelated
+  problem it noticed, something that may belong in `known-issues.md` — goes in `NOTES`.
 
 **reviewer**
 - Its job is to break the claim, not to confirm it. The builder's account is one of the
@@ -398,7 +418,8 @@ section, never by editing someone else's text.
 - Records the commit at start and end; if it moved, the verdict is `unverified`. Evidence
   produced at another commit cannot support `approved`.
 - Never edits, formats, or fixes, inside or outside the reviewed tree; scratch work goes to a
-  temporary directory. `git status` is clean before it returns.
+  temporary directory. `git status` is clean before it returns. If it is not, the reviewer
+  reports `TREE: dirty` with the verdict `unverified` and does not clean it.
 - An error, timeout, missing tool, or unrun central check is `unverified`, never `approved`.
 - Severity: **critical** — data loss, a security breach, or a wrong result reaching users with
   no workaround; **high** — a requirement of the task not met, or a defect a user hits in
@@ -406,11 +427,13 @@ section, never by editing someone else's text.
 - Any critical or high finding is `changes required`. With only medium or low findings the
   verdict is `approved` and the findings are listed; the orchestrator records them and the
   human decides at merge whether each becomes a new task or goes to `known-issues.md`.
-- `check` mode runs the checks the project configures, in this order where present — type
-  check, lint, build, test — and reads the diff against the task. A check the project does
-  not configure is `n/a`; one that could not run is `not run` with the reason.
-- `adversarial` mode adds reproduction and counter-example search in the order security,
-  data integrity, correctness, performance.
+- Both modes run the checks the project configures, in this order where present — type
+  check, lint, build, test — read the diff against the task, and reproduce the central claim
+  by running the done condition and the requirement's behaviour through the agreed seam. A
+  check the project does not configure is `n/a`; one that could not run is `not run` with
+  the reason.
+- `adversarial` mode adds a counter-example search in the order security, data integrity,
+  correctness, performance. Each suspected defect is reproduced before it is reported.
 
 **discover**
 - One question at a time; facts it can look up are not asked.
@@ -455,6 +478,12 @@ section, never by editing someone else's text.
   running; in an orchestrated run, subagents report and the orchestrator writes.
 - Phases: every phase approval is recorded in `state.md` with the path and commit of the
   approved file, instead of an `Approved:` line in the file itself.
+
+`GLOBAL_RULES.md` (step 7-2, done):
+
+- Session start: in an orchestrated run, a subagent reads what its spawn prompt names
+  instead of `state.md`; only the orchestrator reads and reconciles it. A task worktree's
+  copy of `state.md` is the one at `BASE` and is stale by construction.
 
 `CLAUDE.md` template: MUST bring `GLOBAL_RULES.md` and the archetype rule into context,
 because that is the only way subagents receive them. The import mechanism is not yet
