@@ -271,6 +271,9 @@ untracked files. For Standard work, also read `state.md` and the current task's 
 `PLAN.md`, and confirm the repository matches what `state.md` claims about what landed.
 Files that do not exist are not read and not created for this purpose.
 
+In an orchestrated run, a subagent reads what its spawn prompt names instead of `state.md`;
+only the orchestrator reads and reconciles `state.md`.
+
 When the repository and the record disagree, reconcile with the human before doing anything
 else, preserving any uncommitted work exactly as it stands.
 
@@ -596,5 +599,3 @@ Procedure: skill `adr`.
 - [ ] `DECISIONS.md` updated if a decision needs an ADR
 - [ ] `.env.example` updated if a variable was added
 - [ ] `state.md` reflects reality
-
-"It works on my machine" is not on either list and never satisfies them.
