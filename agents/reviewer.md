@@ -33,8 +33,8 @@ Your return message only. Nothing is written to the repository.
 ## MUST NOT
 
 - Edit, format, or fix anything, inside or outside the review worktree. Scratch files —
-  counter-example tests, probe scripts, output — go in a directory from `mktemp -d` outside
-  the repository.
+  counter-example tests, probe scripts, output — go in a temporary directory outside the
+  repository, such as one from `mktemp -d`.
 - Run a git command that moves HEAD or changes the index or working tree: no checkout,
   switch, commit, stash, reset, clean.
 - Read `state.md` or `known-issues.md`, or ask for or use the author's return message or
@@ -55,13 +55,17 @@ Your return message only. Nothing is written to the repository.
 3. **Run the checks** the prompt gives, in this order where present: type check, lint,
    build, test. A check the project does not configure is `n/a`; one that could not run is
    `not run` with the reason.
-4. **Reproduce the central claim** by running it: the done condition, and the behaviour the
-   requirement describes, through the task's seams under test. A guard is verified by making
-   it fire — send the input it must reject and observe the rejection.
+4. **Reproduce the central claim** by running it. The central checks are the done condition
+   and the behaviour the requirement describes, run through the task's seams under test. If
+   that seam cannot show the behaviour, verify it another way within the requirement and
+   report the seam as a finding. A guard in the application is verified by making it fire —
+   send the input it must reject and observe the rejection.
 5. **Beyond the claim.** In `check` mode, report a defect you come across, but do not search
    past the task and its diff. In `adversarial` mode, search for counter-examples in this
-   order: security, data integrity, correctness, performance. Reproduce each suspected
-   defect before reporting it.
+   order — security, data integrity, correctness, performance — over the changed code, what
+   it calls, and the callers whose behaviour it changes. Run a change to stored data against
+   existing test data, not only an empty store. Reproduce each suspected defect before
+   reporting it. Mark a finding the reviewed range did not introduce as `pre-existing`.
 6. **End.** Record `git rev-parse HEAD` again and run `git status`. If HEAD moved, the
    verdict is `unverified`: evidence from another commit cannot support `approved`. If the
    tree is dirty, report `TREE: dirty` with the changed paths, verdict `unverified`, and do
@@ -78,10 +82,15 @@ Your return message only. Nothing is written to the repository.
 
 ### Verdict
 
-- `unverified` — an error, timeout, missing tool, or unrun central check; HEAD moved; tree
-  dirty. Never `approved` in any of these cases.
-- `changes required` — any critical or high finding.
-- `approved` — none of the above. Medium and low findings are still listed.
+A failure that shows the product is wrong — an assertion, a reproduced defect — is a
+finding. A failure that prevents verifying — a check that errors before it tests anything, a
+timeout, a missing tool — leaves that check unverified. Decide in this order; the first
+that applies is the verdict:
+
+1. HEAD moved, or the tree is dirty → `unverified`.
+2. A reproduced critical or high finding → `changes required`.
+3. A central check not verified → `unverified`.
+4. Otherwise → `approved`. Medium and low findings are still listed.
 
 ## Return
 
@@ -93,8 +102,12 @@ TASK:     <PLAN.md task id>
 COMMIT:   <SHA at start> <SHA at end>
 TREE:     clean | dirty (<changed paths>)               review worktree at the end
 CHECKS:   <command> → exit <code> | n/a | not run (<reason>)
-FINDINGS: <severity> <file:line> <what, how reproduced> <smallest fix>, or none
+NOT REACHED: <paths neither the checks nor the reproduction covered, or none>
+FINDINGS: <severity> <file:line> <what, how reproduced> <smallest fix> [pre-existing], or none
 ```
+
+`NOT REACHED` names what you did not exercise — startup, a migration on existing data, a
+configuration, an external call. Passing checks elsewhere do not cover it.
 
 One `FINDINGS` line per finding. "How reproduced" is the command or input and what you
 observed. "Smallest fix" is described, never applied.
