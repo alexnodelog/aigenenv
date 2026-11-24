@@ -26,12 +26,15 @@ begins and ends in one session has no `state.md` and does not create one.
 
 ## 2. Before writing
 
+Commands in this skill are for bash; on Windows they run in WSL2.
+
 1. `git status --porcelain state.md`. If it shows changes this session did not make, stop
    and ask: they are the human's.
-2. If `state.md` is missing, write it now with the sections of §3 that apply, `## Next`
-   filled with the one action you are on, every other section `none`. If it exists, replace
-   only `## Next` with that action. Save it — and commit it (§6) if the session might end
-   before you finish — so a session that runs out of room still leaves a valid file.
+2. At the start of Standard work, run §7 before writing anything.
+3. Later in the session, when it may end before you finish: if `state.md` is missing, write
+   it with the sections of §3 that apply, `## Next` filled with the one action you are on,
+   every other section `none`. If it exists, replace only `## Next` with that action. Save
+   and commit it (§6), so a session that runs out of room still leaves a valid file.
 
 ## 3. Template
 
@@ -46,6 +49,7 @@ Uncommitted: <paths and what they are | none>
 ## Approvals
 - PRD.md @ <full SHA> — YYYY-MM-DD
 - PLAN.md @ <full SHA> — YYYY-MM-DD
+- PLAN.md @ <full SHA> — YYYY-MM-DD — superseded YYYY-MM-DD
 - <file>: skipped by the human — YYYY-MM-DD
 
 ## Plan
@@ -66,13 +70,14 @@ Attempts:
 Human:
 - YYYY-MM-DD: <answer or direction>
 Live checks approved: <check, for which run | none>
-Merged: <merge commit SHA>; check: <verdict stands | re-review: verdict> | none
+Merged: <merge commit SHA>; check: <verdict stands | re-review (other commits | merge edits): verdict> | none
 
 ## Exposure
 - <risk accepted without a way back, and where it is recorded | none>
 
 ## History
 - YYYY-MM-DD <what landed> @ <full SHA>; verified by <checks or verdict>
+- YYYY-MM-DD task <id> done: approved @ <full SHA>, merged @ <full SHA>; check: <verdict stands | re-review: verdict>
 ```
 
 - `## Next` is always first and always one action. A list of next steps is a plan, and plans
@@ -84,9 +89,12 @@ Merged: <merge commit SHA>; check: <verdict stands | re-review: verdict> | none
   `done`.
 - `Baseline` is copied from the first builder's return and never changed afterwards.
 - `Attempts` and `Human` keep every entry across sessions; a new session never clears them.
-- When a task reaches `done`, its section is replaced by one `## History` line naming the
-  task, its merge commit and what verified it. Its medium and low findings are already
-  decided by then.
+- Only a `done` task is folded: its section is replaced by one `## History` line with the
+  task id, the approved commit, the merge commit and the merge-check result. Its medium and
+  low findings are decided by then. Every other state keeps its full section.
+- A task sent back to `planned` by an amended plan keeps its section; only `Status` changes.
+- An approval is never overwritten. A new approval of the same file adds a line, and the
+  earlier line is marked `superseded` with the date.
 - `## History` is append-only, newest last.
 - No secret values anywhere: when the human's answer contains a token, a password or a key,
   record the decision without the value. `## Exposure` describes a risk, never how to use it.
@@ -106,7 +114,8 @@ git worktree list --porcelain        # orchestrated runs
 - Every SHA written into `state.md` comes from a command run in this step, in full.
 - Committing code is the task's own step, not this skill's. Uncommitted changes, whoever
   made them, are listed under `Uncommitted` with what they are, and are never committed,
-  stashed or discarded to make the tree look clean.
+  stashed or discarded to make the tree look clean. Uncommitted changes to `state.md`
+  itself that this session did not make are the exception: §2 stops first.
 
 ## 5. Recording an approval or a skip
 
@@ -114,8 +123,9 @@ The human approves `PRD.md` or `PLAN.md` in the session, in words. Silence is no
 
 1. `git diff --quiet HEAD -- <path>` must exit 0 and the file must be tracked. Otherwise the
    committed version is not the one the human saw: stop and say so.
-2. Add or replace its line under `## Approvals`: path, the full SHA from
-   `git log -n 1 --format=%H -- <path>`, today's date.
+2. Add its line under `## Approvals`: path, the full SHA from
+   `git log -n 1 --format=%H -- <path>`, today's date. An earlier line for the same file is
+   kept and marked `superseded` with today's date.
 3. When the human tells you to skip a phase, that instruction is the approval: record
    `<file>: skipped by the human — YYYY-MM-DD`.
 4. Never write `Approved:` into `PRD.md` or `PLAN.md` itself.
@@ -127,10 +137,11 @@ means stop and ask.
 
 ## 6. Check and commit
 
-1. Read `state.md` back. Every SHA resolves (`git rev-parse --verify --quiet "<SHA>^{commit}"`
-   — the quotes matter in PowerShell). For each task in `spawned`, `built` or `reviewing`,
-   its worktree exists and `Last commit` equals `git rev-parse task/<id>`. `## Next` is one
-   action.
+1. Read `state.md` back. Every SHA resolves (`git rev-parse --verify --quiet "<SHA>^{commit}"`).
+   For each task in `spawned`, `built` or `reviewing`, its worktree appears in
+   `git worktree list` and `Last commit` equals `git rev-parse task/<id>`. For each task in
+   `approved`, the `Review` SHA equals `Last commit`: a verdict covers one commit only.
+   `## Next` is one action.
 2. Stage `state.md` alone, by name: `git add state.md`. In an orchestrated run, also
    `known-issues.md` when the human deferred something in this step.
 3. `git commit -m "docs(state): <the next action, shortly>"`.
