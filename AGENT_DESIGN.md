@@ -236,9 +236,9 @@ One writer per file at any moment. This is what makes parallel builders mergeabl
 | File | Writer | Notes |
 |---|---|---|
 | `PRD.md` | `discover` session | Committed before the human is asked to approve it |
-| `PLAN.md` | `planner` | Each task names: its requirement, what blocks it, file scope, seams under test, done condition, `parallel: yes/no`. The planner has no `Bash`; the orchestrator commits the file before asking the human to approve it |
+| `PLAN.md` | `planner` | Each task names: its requirement, what blocks it, file scope, files to delete, seams under test, done condition, `parallel: yes/no`. The planner has no `Bash`; the orchestrator commits the file before asking the human to approve it |
 | Code, tests | `builder`, on `task/<id>` only | |
-| `DECISIONS.md`, `README.md`, `.env.example` | `builder`, in the commit that caused the change | |
+| `DECISIONS.md`, `README.md`, `.env.example` | `builder`, in the commit that caused the change, when the task's file scope includes the file | See "Shared records" below |
 | `state.md` | `orchestrate`; when no orchestrator is running, the single session that is — including the `discover` session recording the PRD approval | Committed only on the branch tasks merge into, at every transition. Task branches never change it |
 | `known-issues.md` | `orchestrate`, after the human decides to defer | Same branch as `state.md`. A subagent proposes — a builder in `NOTES`, a reviewer in `FINDINGS` — never writes |
 | Review verdict | Nobody writes a file | The orchestrator records it in `state.md`; the approved verdict line goes into the merge commit message the human makes |
@@ -246,7 +246,21 @@ One writer per file at any moment. This is what makes parallel builders mergeabl
 **A file outside scope.** A builder that needs to change a file outside its task's scope —
 shared test setup, project metadata — returns `BLOCKED` naming the file. The orchestrator
 does not widen scope; the plan is amended. Approving `parallel: yes` does not grant either
-task the shared file.
+task the shared file. Before each commit the builder checks that every staged path is inside
+the scope, so a stray edit is caught by the builder and not first by the reviewer.
+
+**Shared records.** `README.md`, `.env.example`, and `DECISIONS.md` are in a task's file
+scope only when the planner expects that task to change them — a new setup step, a new
+environment variable, a decision needing a record. They are not added to every task: each
+is one shared file, and two tasks holding the same one are never `parallel: yes`.
+
+**Deletions are named at Plan.** A task that removes files lists each one by path. The
+human's approval of the plan is the explicit approval for deleting exactly those files.
+Any other deletion is still a Blocking action, and the builder returns `BLOCKED`.
+
+**Done conditions are checkable as written.** Each states the command to run, the
+environment it needs, and the expected result. What no command can check states what to
+observe and what counts as passing.
 
 **Seams are agreed at Plan.** A builder cannot ask the human which interface to test, so the
 planner proposes the seams for each task in `PLAN.md` and the human approves them with the
@@ -383,8 +397,11 @@ section, never by editing someone else's text.
 - Writes no code, and proposes no plan content before it has read `PRD.md` in full.
 - Slices work vertically: each task delivers one thin end-to-end behaviour that can be
   verified on its own, not one layer of many features.
-- Each task states what blocks it, the files it may touch, the seams its tests use, and a
-  done condition a fresh session can check.
+- Each task states what blocks it, the files it may touch, the files it deletes, the seams
+  its tests use, and a done condition a fresh session can check — command, environment,
+  expected result.
+- Puts `README.md`, `.env.example`, or `DECISIONS.md` in a task's scope only when that task
+  is expected to change it.
 - Asks nothing it can look up in the code. A question only the human can answer goes into
   its return as `BLOCKED`.
 - On `BLOCKED`, leaves `PLAN.md` exactly as it found it — absent or unchanged — so no
@@ -398,10 +415,16 @@ section, never by editing someone else's text.
   repeat. Never write all the new tests before any code.
 - Tests go through the agreed seam and assert behaviour, never internals. An expected value
   comes from the requirement or a worked example, never recomputed the way the code does.
+  The input limits, error conditions, and boundaries the requirement states are tested; ones
+  it does not state are not invented.
 - No coverage target.
 - Refactoring changes no behaviour, and afterwards every check that passed before it still
   passes; checks that already failed at `BASE` stay recorded, not counted against it. It is
   never mixed into the commit of a behaviour change.
+- Stages paths by name, never everything at once, and before each commit confirms every
+  staged path is inside the file scope. Its own stray edit is undone; a file the task truly
+  needs is `BLOCKED`.
+- Deletes only the files the task names for deletion.
 - Returns `DONE` only with every change committed and the worktree clean.
 - A bug starts with a test that fails for the stated reason; when the cause is unknown, it
   follows `diagnose`.
