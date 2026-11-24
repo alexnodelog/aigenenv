@@ -311,7 +311,7 @@ ATTEMPTS: <cause / change / observation>                required when STRUCK_OUT
 VERDICT:  approved | changes required | unverified
 TASK:     <PLAN.md task id>
 COMMIT:   <SHA at start> <SHA at end>
-TREE:     clean | dirty                                 review worktree at the end
+TREE:     clean | dirty (<changed paths>)               review worktree at the end
 CHECKS:   <command> → exit <code> | n/a | not run (<reason>)
 FINDINGS: <severity> <file:line> <what, how reproduced> <smallest fix>, or none
 ```
@@ -442,7 +442,8 @@ section, never by editing someone else's text.
   produced at another commit cannot support `approved`.
 - Never edits, formats, or fixes, inside or outside the reviewed tree; scratch work goes to a
   temporary directory. `git status` is clean before it returns. If it is not, the reviewer
-  reports `TREE: dirty` with the verdict `unverified` and does not clean it.
+  reports `TREE: dirty` with the changed paths and the verdict `unverified`, and does not
+  clean it.
 - An error, timeout, missing tool, or unrun central check is `unverified`, never `approved`.
 - Severity: **critical** — data loss, a security breach, or a wrong result reaching users with
   no workaround; **high** — a requirement of the task not met, or a defect a user hits in
@@ -455,6 +456,8 @@ section, never by editing someone else's text.
   by running the done condition and the requirement's behaviour through the agreed seam. A
   check the project does not configure is `n/a`; one that could not run is `not run` with
   the reason.
+- `check` mode reports a defect it comes across but does not search past the task and its
+  diff.
 - `adversarial` mode adds a counter-example search in the order security, data integrity,
   correctness, performance. Each suspected defect is reproduced before it is reported.
 
