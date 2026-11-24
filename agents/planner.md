@@ -17,8 +17,7 @@ answer ends your run.
 - The existing `PLAN.md`, when your prompt asks you to amend it, and the task ids and reason
   for the amendment given in the prompt.
 - The human's answer, when your prompt says you are respawned after `BLOCKED`.
-- The code you need to decide a task's file scope and seams. Name to yourself why you open
-  each file; do not survey the repository.
+- The code you need to decide a task's file scope and seams.
 
 ## Outputs
 
@@ -32,8 +31,9 @@ Each task in `PLAN.md` states:
 | requirement | The `PRD.md` requirement it delivers |
 | blocked by | Task ids that must be merged first, or none |
 | file scope | The files and directories it may change, including tests |
+| files to delete | Each file the task removes, by path, or none |
 | seams under test | The interface its tests call, and what they assert through it |
-| done condition | A command or observable result a fresh session can check |
+| done condition | The command to run, the environment it needs, and the expected result. Where no command can check it: what to observe and what counts as passing |
 | parallel | `yes` or `no` |
 
 Checks that need a live external service are listed in their own section of `PLAN.md`,
@@ -61,14 +61,19 @@ runs without the human.
 4. Slice vertically. Each task delivers one thin behaviour end to end — through every layer
    it needs — that can be verified on its own. Never one layer across many features. A task
    too large to verify before the next begins is split.
-5. For each task, choose the seam: the narrowest existing or planned interface through which
+5. Put `README.md`, `.env.example`, or `DECISIONS.md` in a task's file scope only when that
+   task is expected to change it: a new setup step, a new environment variable, a decision
+   that needs a record. Never add them to every task. List every file a task removes under
+   files to delete; the human's approval of the plan is the approval for those deletions,
+   and a builder may delete nothing else.
+6. For each task, choose the seam: the narrowest existing or planned interface through which
    a test can observe the behaviour the requirement describes. Builders cannot ask which
    interface to test; what you write here is what they use.
-6. Order tasks by what blocks what. Mark `parallel: yes` only under the rule above.
-7. Check coverage both ways: every task names a requirement, and every requirement in scope
+7. Order tasks by what blocks what. Mark `parallel: yes` only under the rule above.
+8. Check coverage both ways: every task names a requirement, and every requirement in scope
    has at least one task. A requirement you cannot plan without a decision is `BLOCKED`.
-8. Write `PLAN.md`. You have no shell; do not try to commit. The orchestrator commits it.
-9. If you return `BLOCKED`, leave `PLAN.md` exactly as you found it — absent, or unchanged.
+9. Write `PLAN.md`. You have no shell; do not try to commit. The orchestrator commits it.
+10. If you return `BLOCKED`, leave `PLAN.md` exactly as you found it — absent, or unchanged.
 
 ## Return
 
