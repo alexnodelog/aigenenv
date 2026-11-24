@@ -85,7 +85,7 @@ human ──▶ [discover session] ──▶ PRD.md ──▶ human approves
           ▼
 [orchestrate] ──spawn──▶ planner ──▶ PLAN.md ──▶ human approves
      │
-     ├─ per task, in PLAN.md order (parallel only for tasks marked parallel: yes):
+     ├─ per task, in PLAN.md order (parallel only for tasks that name each other under parallel with):
      │     record task as spawned (branch, worktree, base commit) in state.md
      │     create worktree + branch task/<id> at the base commit
      │     spawn builder ──▶ commits on task/<id>, returns status
@@ -99,6 +99,7 @@ human ──▶ [discover session] ──▶ PRD.md ──▶ human approves
      │
      ├─ builder BLOCKED / STRUCK_OUT → ask the human, record the answer, respawn a builder
      └─ planner BLOCKED              → ask the human, record the answer, respawn the planner
+                                       (a NEEDS starting "PRD:" goes back to a discover session)
 ```
 
 **One task, one human checkpoint.** Every task ends with a reviewer verdict and the human
@@ -106,15 +107,23 @@ merging its branch. The next task that depends on it starts only after that merg
 chosen cost of the Human-in-the-Loop policy, not a safety requirement of every change.
 
 **Sequential or parallel.** Tasks run one at a time by default. Two tasks MAY run at the same
-time only when `PLAN.md` marks both `parallel: yes`, which the planner may do only when
-neither blocks the other and their file scopes do not overlap. The human approves this with
-the plan; the orchestrator never decides it on its own. Both modes use the same procedure —
+time only when each names the other under `parallel with` in `PLAN.md`. The planner may pair
+two tasks only when neither blocks the other, directly or through other tasks, and their
+file scopes share no file — a directory in a scope counts as every file under it. The human
+approves this with the plan; the orchestrator never decides it on its own. Both modes use the same procedure —
 a worktree and a `task/<id>` branch per task — so switching between them changes nothing
 else.
 
 **Reviewer mode.** `adversarial` when the task is in the Always-Standard list or changes a
-public interface; `check` for every other Standard task. The orchestrator states the mode
-in the spawn prompt; the reviewer does not choose it.
+public interface; `check` for every other Standard task. The orchestrator does not read
+code, so the planner states each task's mode in `PLAN.md` with a one-line reason, and the
+human approves it with the plan. The orchestrator passes it in the spawn prompt; the
+reviewer does not choose it.
+
+**A planner question about `PRD.md`.** When the planner returns `BLOCKED` with a `NEEDS`
+that starts `PRD:`, the answer belongs in `PRD.md`, which only a discover session writes.
+The orchestrator stops; the human answers in a discover session, `PRD.md` is approved again,
+and the planner is respawned against the new approval.
 
 **Merge check.** A verdict covers one commit, not the merge. The human merges with a merge
 commit (`git merge --no-ff`); fast-forward, squash, and rebase merges are not used, since
@@ -238,7 +247,7 @@ One writer per file at any moment. This is what makes parallel builders mergeabl
 | File | Writer | Notes |
 |---|---|---|
 | `PRD.md` | `discover` session | Committed before the human is asked to approve it |
-| `PLAN.md` | `planner` | Each task names: its requirement, what blocks it, file scope, files to delete, seams under test, done condition, `parallel: yes/no`. The planner has no `Bash`; the orchestrator commits the file before asking the human to approve it |
+| `PLAN.md` | `planner` | Each task names: its requirement (identifier, or heading verbatim), what blocks it, file scope, files to delete, seams under test, done condition, review mode with its reason, `parallel with`. Live checks sit in their own section, each marked `human-run` when it can cost money or message a real person. The planner has no `Bash`; the orchestrator commits the file before asking the human to approve it |
 | Code, tests | `builder`, on `task/<id>` only | |
 | `DECISIONS.md`, `README.md`, `.env.example` | `builder`, in the commit that caused the change, when the task's file scope includes the file | See "Shared records" below |
 | `state.md` | `orchestrate`; when no orchestrator is running, the single session that is — including the `discover` session recording the PRD approval | Committed only on the branch tasks merge into, at every transition. Task branches never change it |
@@ -247,14 +256,15 @@ One writer per file at any moment. This is what makes parallel builders mergeabl
 
 **A file outside scope.** A builder that needs to change a file outside its task's scope —
 shared test setup, project metadata — returns `BLOCKED` naming the file. The orchestrator
-does not widen scope; the plan is amended. Approving `parallel: yes` does not grant either
-task the shared file. Before each commit the builder checks that every staged path is inside
+does not widen scope; the plan is amended. Pairing two tasks under `parallel with` does not
+grant either of them the shared file. Before each commit the builder checks that every staged path is inside
 the scope, so a stray edit is caught by the builder and not first by the reviewer.
 
 **Shared records.** `README.md`, `.env.example`, and `DECISIONS.md` are in a task's file
 scope only when the planner expects that task to change them — a new setup step, a new
 environment variable, a decision needing a record. They are not added to every task: each
-is one shared file, and two tasks holding the same one are never `parallel: yes`.
+is one shared file, and two tasks holding the same one are never paired under
+`parallel with`.
 
 **Deletions are named at Plan.** A task that removes files lists each one by path. The
 human's approval of the plan is the explicit approval for deleting exactly those files.
@@ -267,7 +277,12 @@ observe and what counts as passing.
 **Seams are agreed at Plan.** A builder cannot ask the human which interface to test, so the
 planner proposes the seams for each task in `PLAN.md` and the human approves them with the
 plan. A builder that finds a seam unworkable returns `BLOCKED` with the seam it proposes
-instead and why; the planner amends that task and the human approves the amendment.
+instead and why; the planner amends that task and the human approves the amendment. A seam
+that does not exist yet is built by the same task or by a task it is blocked by.
+
+**Amendments stay inside the named tasks.** The planner edits `PLAN.md` in place and changes
+only the tasks the prompt names. When the change makes another task's `blocked by` or
+`parallel with` wrong, it returns `BLOCKED` naming those task ids instead of editing them.
 
 ---
 
@@ -283,7 +298,8 @@ instead and why; the planner amends that task and the human approves the amendme
 | `reviewer` | The task text, the base and head commits, the mode, the check commands, the absolute review worktree path | — |
 
 Any role that runs checks also receives the live checks the human approved for this run.
-A live check not named there is `not run`.
+A live check not named there is `not run`. The check commands are the ones the project's
+`CLAUDE.md` lists.
 
 **Return message** (subagent → orchestrator). One schema per role; nothing else in the
 message.
@@ -291,7 +307,7 @@ message.
 `planner`
 ```
 STATUS:   DONE | BLOCKED
-NEEDS:    <the decision required>                       required when BLOCKED
+NEEDS:    <the decisions required, numbered; one about PRD.md starts "PRD:">   required when BLOCKED
 ```
 
 `builder`
@@ -300,7 +316,7 @@ STATUS:   DONE | BLOCKED | STRUCK_OUT
 TASK:     <PLAN.md task id>
 BASE:     <full SHA the branch started from>
 COMMIT:   <full SHA of task/<id> HEAD, or none>
-BASELINE: <checks failing at BASE before any change, or none>   the received value on a respawn
+BASELINE: <command → exit code for each check failing at BASE, or none>   on a respawn, the received value unchanged
 CHECKS:   <command> → exit <code> | n/a | not run (<reason>)   one line per configured check
 NOT REACHED: <paths the checks did not cover, or none>
 NOTES:    <notify-tier changes, unrelated problems noticed, known-issues proposals, or none>
@@ -315,7 +331,8 @@ TASK:     <PLAN.md task id>
 COMMIT:   <SHA at start> <SHA at end>
 TREE:     clean | dirty (<changed paths>)               review worktree at the end
 CHECKS:   <command> → exit <code> | n/a | not run (<reason>)
-FINDINGS: <severity> <file:line> <what, how reproduced> <smallest fix>, or none
+NOT REACHED: <paths neither the checks nor the reproduction covered, or none>
+FINDINGS: <severity> <file:line> <what, how reproduced> <smallest fix> [pre-existing], or none
 ```
 
 **Malformed or unverifiable returns are never filled in.** A builder or planner message
@@ -361,8 +378,9 @@ Body sections, in this order: **Role** (one paragraph) / **Inputs** / **Outputs*
 | Citing section numbers of other documents | Prohibited — section numbers change in step 3 |
 
 **What `tools` enforces and what it does not.** `reviewer` gets no `Edit` or `Write`, but it
-needs `Bash` to run checks, and `Bash` can write anywhere. `planner` gets `Write` for
-`PLAN.md` and no `Edit` or `Bash`, but `Write` takes any path. Neither is read-only by
+needs `Bash` to run checks, and `Bash` can write anywhere. `planner` gets `Write` and `Edit`
+for `PLAN.md` — `Edit` so an amendment changes only the named tasks — and no `Bash`, but both
+take any path. Neither is read-only by
 configuration. What holds instead: the reviewer works in a disposable worktree that is never
 merged, and the orchestrator's after-return check in §5 detects repository changes outside
 it and any planner write other than `PLAN.md`, within the limits stated there.
@@ -404,8 +422,10 @@ section, never by editing someone else's text.
   expected result.
 - Puts `README.md`, `.env.example`, or `DECISIONS.md` in a task's scope only when that task
   is expected to change it.
+- States each task's review mode and why, and pairs tasks under `parallel with` only under
+  the rule in §3.
 - Asks nothing it can look up in the code. A question only the human can answer goes into
-  its return as `BLOCKED`.
+  its return as `BLOCKED`; one whose answer belongs in `PRD.md` starts `PRD:`.
 - On `BLOCKED`, leaves `PLAN.md` exactly as it found it — absent or unchanged — so no
   half-written plan is left uncommitted in the checkout.
 
@@ -418,16 +438,21 @@ section, never by editing someone else's text.
 - Tests go through the agreed seam and assert behaviour, never internals. An expected value
   comes from the requirement or a worked example, never recomputed the way the code does.
   The input limits, error conditions, and boundaries the requirement states are tested; ones
-  it does not state are not invented.
-- No coverage target.
+  it does not state are not invented. A new test fails by its assertion; an import, fixture,
+  or environment error is not the failure the requirement describes.
+- Rework starts by reproducing each finding, as a failing test where it is behavioural.
+- Checks run only with the setup the project documents. A check that would need the
+  environment or project files changed to run is `not run`, with the reason.
 - Refactoring changes no behaviour, and afterwards every check that passed before it still
   passes; checks that already failed at `BASE` stay recorded, not counted against it. It is
   never mixed into the commit of a behaviour change.
-- Stages paths by name, never everything at once, and before each commit confirms every
-  staged path is inside the file scope. Its own stray edit is undone; a file the task truly
-  needs is `BLOCKED`.
+- Stages paths by name, never everything at once, and before each commit reads the staged
+  diff and confirms every staged path is inside the file scope. Its own stray edit is
+  undone; a file the task truly needs is `BLOCKED`.
 - Deletes only the files the task names for deletion.
-- Returns `DONE` only with every change committed and the worktree clean.
+- Returns `DONE` only with every change committed and the worktree clean, and with `CHECKS`
+  run at that committed HEAD.
+- Earlier attempts count toward three strikes only when they were at the same cause.
 - A bug starts with a test that fails for the stated reason; when the cause is unknown, it
   follows `diagnose`.
 - A change that makes a decision needing a record adds it to `DECISIONS.md` in the same
@@ -438,15 +463,25 @@ section, never by editing someone else's text.
 **reviewer**
 - Its job is to break the claim, not to confirm it. The builder's account is one of the
   things under test, and the reviewer never receives it.
-- Reproduces the central claim by running it — a guard is verified by making it fire. Reading
-  alone never approves runtime behaviour.
+- Reproduces the central claim by running it — a guard in the application is verified by
+  making it fire. Reading alone never approves runtime behaviour. The central checks are the
+  done condition and the requirement's behaviour. When the agreed seam cannot show that
+  behaviour, the reviewer verifies it another way within the requirement and reports the
+  seam as a finding.
 - Records the commit at start and end; if it moved, the verdict is `unverified`. Evidence
   produced at another commit cannot support `approved`.
 - Never edits, formats, or fixes, inside or outside the reviewed tree; scratch work goes to a
   temporary directory. `git status` is clean before it returns. If it is not, the reviewer
   reports `TREE: dirty` with the changed paths and the verdict `unverified`, and does not
   clean it.
-- An error, timeout, missing tool, or unrun central check is `unverified`, never `approved`.
+- A failure that shows the product is wrong is a finding. A failure that prevents
+  verifying — a check that errors before it tests anything, a timeout, a missing tool, an
+  unrun central check — is `unverified`, never `approved`.
+- Verdict precedence: HEAD moved or tree dirty → `unverified`; otherwise a reproduced
+  critical or high finding → `changes required`; otherwise a central check not verified →
+  `unverified`; otherwise `approved`.
+- Names the paths neither the checks nor its reproduction reached, in `NOT REACHED`, and
+  marks a finding the reviewed range did not introduce as pre-existing.
 - Severity: **critical** — data loss, a security breach, or a wrong result reaching users with
   no workaround; **high** — a requirement of the task not met, or a defect a user hits in
   normal use; **medium** — a defect only in an edge case; **low** — anything else.
@@ -461,7 +496,9 @@ section, never by editing someone else's text.
 - `check` mode reports a defect it comes across but does not search past the task and its
   diff.
 - `adversarial` mode adds a counter-example search in the order security, data integrity,
-  correctness, performance. Each suspected defect is reproduced before it is reported.
+  correctness, performance, over the changed code, what it calls, and the callers whose
+  behaviour it changes. A change to stored data is run against existing test data, not
+  only an empty store. Each suspected defect is reproduced before it is reported.
 
 **discover**
 - One question at a time; facts it can look up are not asked.
@@ -514,7 +551,8 @@ section, never by editing someone else's text.
   copy of `state.md` is the one at `BASE` and is stale by construction.
 
 `CLAUDE.md` template: MUST bring `GLOBAL_RULES.md` and the archetype rule into context,
-because that is the only way subagents receive them. The import mechanism is not yet
+because that is the only way subagents receive them. It MUST also list the project's check
+commands, which the orchestrator passes to builders and reviewers. The import mechanism is not yet
 verified.
 
 Skills to draft (step 7): `orchestrate`, `discover`, `handoff` (including the `state.md`
