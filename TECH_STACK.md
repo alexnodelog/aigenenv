@@ -174,6 +174,26 @@ worktree; every agent gets an explicit directory scope; an agent that fails the 
 three times stops and asks a human. Any tool that satisfies those rules is acceptable, and
 the rules survive these tools being replaced.
 
+### 4.3 Agent isolation
+
+Every command an agent runs is confined by the operating system, not by instruction.
+The requirement is the same for every coding agent; only the mechanism differs.
+
+Any mechanism MUST provide all of:
+- Writes only to the repository, its task worktrees, and a temporary directory
+- No reads of personal credential files
+- Network only to an allowlist of hosts the work needs
+- Fail closed: if the isolation cannot start, the agent does not start
+
+| Choice | Default | Alternative | Prohibited |
+|---|---|---|---|
+| Mechanism | The agent's own OS sandbox, configured to the requirement above. Claude Code: `sandbox` settings with `failIfUnavailable: true`, plus permission rules that deny the file tools outside the repository and on credential paths | `srt` (sandbox-runtime, Apache-2.0) wrapping the whole agent process, for an agent with no sandbox of its own — beta, Windows alpha. A Podman container with only the repository mounted | Running an agent with its sandbox off or unavailable. Skipping permissions outside a container. Docker Desktop — paid for government entities and larger organizations |
+| Windows | WSL2; agents run inside it | Codex's native Windows sandbox, when Codex is the agent | Claude Code on native Windows — it runs commands unsandboxed |
+
+**Why by environment.** An instruction cannot stop a test that wipes a database or reads
+`~/.ssh`; only a boundary the agent cannot cross does. The requirement is fixed here so a
+new agent is adopted by checking its mechanism against it, not by rewriting the rules.
+
 ---
 
 ## 5. Archetype Stacks
@@ -851,6 +871,8 @@ final deployed state is listed, including items only needed at release time.
 | GitHub CLI (`gh`) | System | Releases, PRs, workflow runs from the terminal |
 | VS Code | System | — |
 | CLI coding agent | System | — |
+| WSL2 | System — Windows only | Agents run inside it. Claude Code does not sandbox commands on native Windows (§4.3) |
+| bubblewrap, socat | System — Linux and WSL2 | Claude Code's sandbox (§4.3) |
 | uv | System | Required even for TypeScript-only projects |
 | pre-commit | Tool (`uv tool install`) | — |
 
