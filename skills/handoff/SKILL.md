@@ -81,7 +81,10 @@ Merged: <merge commit SHA>; check: <verdict stands | re-review (other commits | 
 ```
 
 - `## Next` is always first and always one action. A list of next steps is a plan, and plans
-  live in `PLAN.md`.
+  live in `PLAN.md`. When the action starts with a skill, `## Next` names it
+  ("Start orchestrate in a new session", "Continue discover: <question>").
+- Nothing from `PRD.md`, `PLAN.md`, `DECISIONS.md` or a commit is copied in; it is named by
+  path, requirement or task id, or SHA.
 - Sections that do not apply are left out: a single session with no `PLAN.md` has no
   `## Plan` or `## Tasks`, and records what it just verified in `## History`.
 - Task states, exactly these words: `planned`, `spawned`, `built`, `reviewing`, `approved`,
