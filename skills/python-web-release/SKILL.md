@@ -164,10 +164,25 @@ CMD ["sh", "-c", "python -m <app>.adapters.migrate && <start command>"]
 
 - Find a digest with `docker buildx imagetools inspect <image>:<tag>`.
 - Start command, Track B:
-  `uvicorn <app>.main:create_app --factory --host 0.0.0.0 --port $PORT --forwarded-allow-ips <host proxy>`
+  `uvicorn <app>.main:create_app --factory --host 0.0.0.0 --port $PORT --forwarded-allow-ips '*'`
 - Start command, Track A:
   `streamlit run src/<app>/streamlit_app.py --server.headless true --server.address 0.0.0.0 --server.port $PORT`
 - `docker build -t <app>:<version> .`
+
+### Client address behind Render (Track B, rule §4.4)
+
+- `--forwarded-allow-ips '*'` lets the `https` scheme reach `Secure` cookies and
+  `url_for`. The container is reachable only through Render's proxy, whose addresses
+  Render does not publish.
+- With `'*'`, Uvicorn takes the client address from the left end of `X-Forwarded-For`,
+  which the client can write, and Render keeps a client-sent `X-Forwarded-For`. The
+  sign-in counters therefore MUST NOT use `request.client`. One function in `web/` reads
+  the address from the header named in `Settings`, `true-client-ip` on Render, set by the
+  CDN in front of it.
+- Walking skeleton check: wrong-password sign-ins from two networks show two addresses;
+  sign-ins carrying a made-up `X-Forwarded-For` and a made-up `True-Client-IP` do not
+  change the counted address. If either fails, stop: no header is trusted, and the human
+  decides.
 
 ## 6. Smoke test (rule §5.3)
 
