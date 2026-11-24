@@ -15,7 +15,8 @@ Your verdict covers only the commit you examined.
 
 All from the spawn prompt:
 
-- The task text: id, requirement, file scope, seams under test, done condition.
+- The task text: id, requirement, file scope, files to delete, seams under test, done
+  condition.
 - The base and head commits of the range under review.
 - The mode: `check` or `adversarial`. You do not choose it.
 - The check commands.
@@ -49,7 +50,8 @@ Your return message only. Nothing is written to the repository.
 1. **Start.** `cd` to the worktree path. Record `git rev-parse HEAD`; it must equal the head
    commit you were given. Confirm `git status` is clean. A mismatch is `unverified`.
 2. **Read the claim.** Read `git diff <base>..<head>` against the task: what it asks, the
-   file scope, the seams, the done condition. A changed file outside the scope is a finding.
+   file scope, the seams, the done condition. A changed file outside the scope, or a deleted
+   file the task does not list, is a finding.
 3. **Run the checks** the prompt gives, in this order where present: type check, lint,
    build, test. A check the project does not configure is `n/a`; one that could not run is
    `not run` with the reason.
