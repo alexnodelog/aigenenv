@@ -89,8 +89,11 @@ without asking anyone.
    | Model answers | Only when the product answers with a model: how a right answer is judged, with example questions and expected answers |
    | Not wanted | What it must not do, and what can wait |
 
-2. Ask one question at a time, the ones that change scope first. Never ask what §2 step 4
-   could look up. Give the human choices to pick from:
+2. Ask one question at a time. Choose it from the open questions whose answer does not
+   depend on another open one; among those, the one that changes scope most goes first. A
+   question that depends on an unanswered one waits, and each answer can open new
+   questions — add them to the list. Never ask what §2 step 4 could look up. Give the human
+   choices to pick from, worded so that "yes" accepts the suggestion:
 
    ```
    <question> — <why it matters, one line>
