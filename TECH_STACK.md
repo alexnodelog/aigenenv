@@ -187,8 +187,19 @@ Any mechanism MUST provide all of:
 
 | Choice | Default | Alternative | Prohibited |
 |---|---|---|---|
-| Mechanism | The agent's own OS sandbox, configured to the requirement above. Claude Code: `sandbox` settings with `failIfUnavailable: true`, plus permission rules that deny the file tools outside the repository and on credential paths | `srt` (sandbox-runtime, Apache-2.0) wrapping the whole agent process, for an agent with no sandbox of its own — beta, Windows alpha. A Podman container with only the repository mounted | Running an agent with its sandbox off or unavailable. Skipping permissions outside a container. Docker Desktop — paid for government entities and larger organizations |
+| Mechanism | The agent's own OS sandbox, configured to the requirement above. Claude Code: `sandbox` settings with `failIfUnavailable: true`, the sandbox's own read denial on credential paths and its network allowlist, running outside the sandbox turned off, plus permission rules that deny the file tools outside the repository and on credential paths | `srt` (sandbox-runtime, Apache-2.0) wrapping the whole agent process, for an agent with no sandbox of its own — beta, Windows alpha. A Podman container with only the repository mounted | Running an agent with its sandbox off or unavailable. Skipping permissions outside a container. Relying on a permission mode that approves by model judgment (Claude Code's auto mode) for any of the four requirements. Docker Desktop — paid for government entities and larger organizations |
 | Windows | WSL2; agents run inside it | Codex's native Windows sandbox, when Codex is the agent | Claude Code on native Windows — it runs commands unsandboxed |
+
+**What Claude Code's sandbox does not cover.** Checked on Claude Code 2.1.332 in WSL2: the
+sandbox confines Bash only, and with `enabled` and `failIfUnavailable` alone it blocked a
+write outside the repository but not a read of a file in the home directory. The Read,
+Edit and Write tools follow permission settings, not the sandbox. Under auto mode — the
+default permission mode in that version — a network request and a Write outside the
+repository were approved by the model, and after the sandbox blocked a command the agent
+retried it outside the sandbox on its own. Each requirement above is therefore met by a
+setting that gives the same answer every time, never by the model's judgment. The exact
+setting names are taken from the current documentation when the project is set up, and the
+four checks are run again on that machine.
 
 **Why by environment.** An instruction cannot stop a test that wipes a database or reads
 `~/.ssh`; only a boundary the agent cannot cross does. The requirement is fixed here so a
