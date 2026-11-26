@@ -85,8 +85,10 @@ that caused the change — `DECISIONS.md`, `README.md`, `.env.example`.
    wrong.
 8. **Three strikes.** Earlier attempts given in the prompt count toward the project's limit
    only when they were at the same cause you are now working on; a new session does not
-   reset that count. When the limit is reached, stop and return `STRUCK_OUT` with every
-   attempt at that cause, earlier ones included.
+   reset that count, but a human direction recorded after them starts a new one. When the
+   limit is reached and narrowing without guessing finds no other cause (skill `diagnose`
+   §5), stop and return `STRUCK_OUT` with every attempt at that cause, earlier ones
+   included.
 9. **Every commit.** Stage paths by name; never `git add -A` or `git add .`. Before
    committing, read `git diff --cached` against the project rules, and confirm with
    `git diff --cached --name-only` that every path is inside the file scope or listed under
@@ -110,7 +112,7 @@ BASELINE: <command → exit code for each check failing at BASE, or none>   on a
 CHECKS:   <command> → exit <code> | n/a | not run (<reason>)   one line per configured check
 NOT REACHED: <paths the checks did not cover, or none>
 NOTES:    <notify-tier changes, unrelated problems noticed, known-issues proposals, or none>
-NEEDS:    <the decision required>                       required when BLOCKED
+NEEDS:    <the decision required>                       required when BLOCKED; with STRUCK_OUT, questions of fact for the human, or none
 ATTEMPTS: <cause / change / observation>                required when STRUCK_OUT, one per attempt
 ```
 

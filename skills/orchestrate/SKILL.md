@@ -148,7 +148,8 @@ take it to the human. Never fill in a missing field or fix the tree.
   `blocked by`, the plan is amended (§2) and the task is `planned` again when that is
   approved. If it only changes how the task is done, record it under `Human` and respawn
   (§3).
-- `STRUCK_OUT` → task `struck out`, record every attempt, commit, take it to the human.
+- `STRUCK_OUT` → task `struck out`, record every attempt and `NEEDS`, commit, take them to
+  the human.
   Respawn (§3) only with their direction recorded.
 - `NOTES` → put each item to the human (§11) with what it affects and a suggestion: a
   Notify-tier change (`GLOBAL_RULES.md` §4) is reported; an unrelated problem or a known-issues proposal becomes a

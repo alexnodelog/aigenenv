@@ -164,7 +164,8 @@ receives that recorded `BASELINE` in its spawn prompt and does not measure it ag
 builder that receives no `BASELINE` while HEAD is past `BASE` returns `BLOCKED`.
 
 **After STRUCK_OUT or BLOCKED.** The attempts stay in `state.md` under the task and cause,
-and the count does not reset with a new session. The worktree is kept. If it has uncommitted
+and the count does not reset with a new session; only a human direction recorded after
+them starts a new count. The worktree is kept. If it has uncommitted
 changes, the human decides whether they are committed or discarded; no agent discards them.
 A builder is respawned only with the human's answer or new direction recorded in `state.md`,
 and receives that answer, the earlier attempts, and the recorded `BASELINE`.
@@ -324,7 +325,7 @@ BASELINE: <command → exit code for each check failing at BASE, or none>   on a
 CHECKS:   <command> → exit <code> | n/a | not run (<reason>)   one line per configured check
 NOT REACHED: <paths the checks did not cover, or none>
 NOTES:    <notify-tier changes, unrelated problems noticed, known-issues proposals, or none>
-NEEDS:    <the decision required>                       required when BLOCKED
+NEEDS:    <the decision required>                       required when BLOCKED; with STRUCK_OUT, questions of fact for the human, or none
 ATTEMPTS: <cause / change / observation>                required when STRUCK_OUT, one per attempt
 ```
 
@@ -456,7 +457,8 @@ section, never by editing someone else's text.
 - Deletes only the files the task names for deletion.
 - Returns `DONE` only with every change committed and the worktree clean, and with `CHECKS`
   run at that committed HEAD.
-- Earlier attempts count toward three strikes only when they were at the same cause.
+- Earlier attempts count toward three strikes only when they were at the same cause, and
+  until a human direction recorded after them.
 - A bug starts with a test that fails for the stated reason; when the cause is unknown, it
   follows `diagnose`.
 - A change that makes a decision needing a record adds it to `DECISIONS.md` in the same
@@ -514,8 +516,10 @@ section, never by editing someone else's text.
 **diagnose**
 - Reproduce, narrow, form one hypothesis, test it. No fix before a failing test shows the
   cause.
-- Escalation goes to the human after three failed attempts at one cause, never to another
-  agent with wider authority.
+- An attempt is a wrong guess or a failed fix at one place. After three, narrow further
+  without guessing; a different place is a new cause.
+- Escalation goes to the human when nothing narrows further, with questions of fact a
+  non-developer can answer, never to another agent with wider authority.
 
 **handoff**
 - Writes `state.md` with the next action first and the history after it.
