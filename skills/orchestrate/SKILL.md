@@ -14,7 +14,8 @@ subagents' return messages; it does not read code. `state.md` is written with sk
 One session takes one task — or one approved parallel pair — to `done`, then ends (§9).
 Commands are for bash; on Windows they run in WSL2. The checkout stays on the target branch
 — the branch tasks merge into — for the whole session. Each subagent's return schema is the
-Return section of `.claude/agents/<name>.md`.
+Return section of `.claude/agents/<name>.md`. An agent is "still running" when it was
+spawned in this session and its return message has not arrived.
 
 ## 1. Start of a session
 
@@ -22,12 +23,14 @@ Return section of `.claude/agents/<name>.md`.
    before anything else.
 2. If `## Plan` records a `Target`, the checkout is on it (`git rev-parse --abbrev-ref HEAD`).
    Otherwise stop and ask.
-3. Read the check commands from `CLAUDE.md`. If it lists none, stop and ask.
+3. Read the check commands from `CLAUDE.md`. If it lists none, stop and ask. Confirm
+   `.claude/agents/planner.md`, `builder.md` and `reviewer.md` exist, each with a Return
+   section; if not, stop: nothing can be spawned.
 4. `PRD.md` has an approval line, and `git diff --quiet <SHA> -- PRD.md` exits 0. Otherwise
    stop: discover comes first.
-5. Continue from `state.md`: no `PLAN.md` or plan `drafting` → §2; `awaiting approval` → §2
-   step 6; `approved` → confirm `git diff --quiet <SHA> -- PLAN.md`, then §10 for any task
-   left mid-step, then §3.
+5. Continue from `state.md`: no `PLAN.md` or plan `drafting` → §2; plan `blocked` → §10;
+   `awaiting approval` → §2 step 7; `approved` → confirm `git diff --quiet <SHA> -- PLAN.md`,
+   then §10 for every task not `planned` or `done`, then §3.
 
 ## 2. Plan
 
@@ -35,7 +38,10 @@ Return section of `.claude/agents/<name>.md`.
 2. `git status --porcelain` must be empty. Otherwise stop and ask: the planner works in this
    checkout.
 3. Snapshot (§4), then spawn the `planner`. Prompt: nothing for a first plan; when amending,
-   the task ids and the reason; after `BLOCKED`, the human's recorded answer.
+   the task ids and the reason, and for each amended task that already has a branch, the
+   files it has changed (`git diff --name-only <Base> task/<id>`) — the amended task keeps
+   each in its file scope, or lists one this task created under files to delete; after
+   `BLOCKED`, the human's recorded answer.
 4. Check the return (§4).
 5. `BLOCKED` → plan `blocked`, `Needs` = its items, commit, and put them to the human (§11).
    - An item starting `PRD:` belongs in `PRD.md`: tell the human to answer it in a discover
@@ -47,20 +53,25 @@ Return section of `.claude/agents/<name>.md`.
    `awaiting approval`, commit `state.md`, and ask the human to approve `PLAN.md` at that
    short SHA. Point them to what they approve: tasks and order, file scopes, files to
    delete, review modes, `parallel with` pairs, live checks.
-7. An unconditional yes → record it (handoff §5), plan `approved`, every task `planned`,
-   commit. A conditional or partial yes ("except task 4", "but keep that file") is a request
+7. An unconditional yes → record it (handoff §5), plan `approved`, commit. On the first
+   approval every task becomes `planned`. On an amended plan only new and amended tasks
+   become `planned`; every other task keeps its state. A conditional or partial yes ("except task 4", "but keep that file") is a request
    for changes: `drafting`, and step 3 with it as the reason.
 
-An approved plan that needs amending goes back to step 1 with the task ids. The amended
-tasks are `planned` again once the new version is approved.
+An approved plan that needs amending goes back to step 1 with the task ids. An amended task
+that already has a branch keeps it: once `planned` again it continues there through
+§3 Respawn, not as a new task.
 
 ## 3. Build
 
 No new task starts while any task is `merged` with its check not yet passed, `unverified`
-after its merge, or `integration failed`. Otherwise take the next `planned` task whose
-`blocked by` tasks are all `done`. If it and another such task name each other under
-`parallel with`, start both — each through this section — before waiting on either. Nothing
-else allows two at once.
+after its merge, or `integration failed` — except the fix task the human added for that
+integration failure. Otherwise take the next `planned` task whose `blocked by` tasks are all
+`done`. If it and another such task name each other under `parallel with`, confirm from
+`PLAN.md` that neither blocks the other, directly or through other tasks, and that their file
+scopes share no path (a directory covers every path under it). If so, start both — each
+through this section — before waiting on either; if not, run them one at a time and tell the
+human. Nothing else allows two at once.
 
 Never spawn an agent for a task while another agent for that task may still be running. A
 spawn that errors or returns nothing usable has an unknown outcome: go to §10, not to a
@@ -73,12 +84,13 @@ second spawn.
 2. Record `spawned`, branch `task/<id>`, worktree `../<repo>.worktrees/<id>`,
    `Base` = `git rev-parse HEAD`. Commit `state.md`.
 3. `git rev-parse --verify --quiet refs/heads/task/<id>` must fail and the path must not
-   exist; otherwise §10. Then `git worktree add -b task/<id> <absolute path> <Base>`, and
+   exist. If `state.md` records that branch for this task — an amended task — use Respawn
+   below instead; any other existing branch or path → §10. Then `git worktree add -b task/<id> <absolute path> <Base>`, and
    confirm its HEAD equals `Base` and its branch is `task/<id>`.
 4. Spawn the builder (below).
 
-**Respawn** (`changes required`, or `blocked` / `struck out` with the human's answer
-recorded):
+**Respawn** (`changes required`; `blocked` / `struck out` with the human's answer recorded;
+an amended task that has a branch):
 
 1. The worktree is listed by `git worktree list` on branch `task/<id>`, its HEAD equals the
    recorded `Last commit` (or `Base` if none), and its `git status --porcelain` is empty.
@@ -93,14 +105,18 @@ recorded):
 - rework: the HEAD of `task/<id>` and the reviewer's findings from `state.md`;
 - any respawn: the recorded `Baseline`;
 - after `BLOCKED` or `STRUCK_OUT`: every `Human` entry and every attempt;
+- an amended task: the HEAD of `task/<id>`, and that the commits after `Base` were made for
+  the earlier version of this task — keep what the amended task needs, change what it does
+  not;
 - the live checks approved for this run.
 
 Never the previous builder's message or a summary of earlier sessions.
 
 ## 4. Snapshot and return check
 
-**Before every spawn**, note for the main checkout and every worktree in
-`git worktree list --porcelain`: HEAD and `git status --porcelain`. The snapshot lives only
+**Before every spawn**, note for the main checkout and every worktree under
+`../<repo>.worktrees/`: HEAD and `git status --porcelain`. Other worktrees of the human's are
+not compared. The snapshot lives only
 in this session, for the return check. If the session ends before the return, §10 applies.
 
 **After every return**, before recording anything:
@@ -111,7 +127,7 @@ in this session, for the return check. If the session ends before the return, §
    | Role | Must hold |
    |---|---|
    | planner | `PLAN.md` is the only changed path in the main checkout |
-   | builder | `COMMIT` exists and equals `git rev-parse task/<id>`; `BASE` equals the recorded `Base`; on a respawn `BASELINE` equals the recorded one; on `DONE`, `git -C <worktree> status --porcelain` is empty |
+   | builder | `COMMIT` equals `git rev-parse task/<id>` — `none` is accepted only with `BLOCKED`, and then the branch must still be at the recorded `Last commit` (or `Base`); `BASE` equals the recorded `Base`, and `git merge-base --is-ancestor <Base> task/<id>` succeeds; on a respawn `BASELINE` equals the recorded one; on `DONE`, `git -C <worktree> status --porcelain` is empty |
    | reviewer | both `COMMIT` SHAs equal the head it was given; `TREE: clean`; the review worktree's `git status --porcelain` is empty |
 
 3. Every other worktree, and the main checkout, matches its snapshot — except the
@@ -137,7 +153,8 @@ take it to the human. Never fill in a missing field or fix the tree.
   new task (plan amendment), a line in `known-issues.md`, or nothing. Record the decision.
 
 The worktree of a blocked or struck-out task is kept. Uncommitted changes in it are the
-human's to commit or discard.
+human's to commit or discard. If the human commits there and says to keep the commit, record
+it as `Last commit` with a `Human` entry; the next builder starts from it.
 
 ## 6. Review
 
@@ -163,8 +180,6 @@ Record the verdict with its commit and mode, `NOT REACHED`, and every finding; c
 `known-issues.md` lines: `- YYYY-MM-DD <issue> — <why deferred> (task <id>, <severity>)`.
 
 ## 8. Merge
-
-The human merges; the orchestrator never does.
 
 **Before handing over the merge:**
 
@@ -192,7 +207,9 @@ merge check then finds the hand edits and §8 step 4 reviews them), or runs
    HEAD is not a merge commit, or its second parent differs, stop: the merge check cannot
    run, and the human decides.
 2. Record task `merged`, `Merged: <HEAD>`, commit.
-3. Merge check, with `state.md` and `known-issues.md` excluded:
+3. Merge check, with `state.md` and `known-issues.md` excluded. First
+   `git merge-base --is-ancestor <Base> <merge>^1` must succeed; if it does not, the target
+   branch was rewritten — the verdict cannot stand on its own, so go to step 4's re-review.
    - Condition 1: `git log --format= --name-only <Base>..<merge>^1` lists no path other
      than those two.
    - Condition 2: `git diff --quiet <approved> <merge> -- . ':(exclude)state.md' ':(exclude)known-issues.md'`
@@ -200,8 +217,9 @@ merge check then finds the hand edits and §8 step 4 reviews them), or runs
 4. Both hold → `check: verdict stands`, task `done`. Either fails → record which, and spawn
    a `check`-mode reviewer on the merge commit (§6, base `<merge>^1`, head `<merge>`). Its
    verdict: `approved` → `done`; `unverified` → task `unverified`; `changes required` →
-   `integration failed` — the human adds a fix task, and the task is `done` only when that
-   fix is merged and the check-mode review of its merge commit approves.
+   `integration failed`. The human adds a fix task by plan amendment (§2); it is the one
+   task allowed to start (§3). When the fix is merged and the check-mode review of its merge
+   commit approves, both the fix task and this task are `done`.
 5. On `done`: remove the task worktree if its `git status --porcelain` is empty
    (`git worktree remove`, never `--force`). Branches are never deleted by an agent. Fold the
    task with skill `handoff`.
@@ -230,6 +248,13 @@ never simply repeated.
 | `approved` | `MERGE_HEAD` exists | §8 conflict |
 | `approved` | Neither | Hand over the merge again (§8) |
 | `merged` | — | Run the merge check again; it only reads |
+| plan `blocked` | The human's answer to `Needs` is recorded after the block | §2 step 3 (or discover, for a `PRD:` item) |
+| plan `blocked` | No answer recorded | Put `Needs` to the human (§11) |
+| `changes required` | As for Respawn (§3) | Respawn as rework |
+| `blocked`, `struck out` | The human's answer is recorded after the stop | §5 for that answer: respawn, or plan amendment |
+| `blocked`, `struck out` | No answer recorded | Put `NEEDS` or the attempts to the human (§11) |
+| `unverified` | — | Ask the human: review again (§6) or treat as `blocked` |
+| `integration failed` | The fix task's state | Continue the fix task; if none is planned, ask the human to add one |
 
 Anything else — new commits, uncommitted changes, a branch or path `state.md` does not
 record — is reported exactly as found, and the human decides what is kept. Never reset,
