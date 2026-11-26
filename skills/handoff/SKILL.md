@@ -64,7 +64,7 @@ Base: <full SHA>  Last commit: <full SHA | none>
 Baseline: <command → exit code for each check failing at Base | none>
 Review: <verdict> @ <full SHA>, <mode> | none
 Findings:
-- <severity> <file:line> <what> → <the human's decision: fix now | new task | known-issues | pending>
+- <severity> <file:line> <what> → <the human's decision: new task | known-issues | pending>
 Attempts:
 - <cause> / <change> / <observation>
 Human:
