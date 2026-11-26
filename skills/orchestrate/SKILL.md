@@ -130,7 +130,7 @@ in this session, for the return check. If the session ends before the return, §
    |---|---|
    | planner | `git status --porcelain` in the main checkout lists `PLAN.md` and nothing else — staged, unstaged and untracked alike |
    | builder | The worktree is on branch `task/<id>` (`git -C <worktree> symbolic-ref --short HEAD`) and its HEAD equals `git rev-parse task/<id>`; `COMMIT` equals that HEAD — `none` is accepted only with `BLOCKED`, and then the branch must still be at the recorded `Last commit` (or `Base`); `BASE` equals the recorded `Base`, and `git merge-base --is-ancestor <Base> task/<id>` succeeds; on a respawn `BASELINE` equals the recorded one; on `DONE`, `git -C <worktree> status --porcelain` is empty |
-   | reviewer | both `COMMIT` SHAs equal the head it was given; `TREE: clean`; the review worktree's `git status --porcelain` is empty; an `approved` lists no critical or high finding |
+   | reviewer | both `COMMIT` SHAs equal the head it was given; `TREE: clean`; the review worktree's `git status --porcelain` is empty; an `approved` lists no critical or high finding unless it is marked `pre-existing` |
 
 3. Every other worktree, and the main checkout, matches its snapshot — except the
    worktrees of agents still running in a parallel pair, which are not compared, and
@@ -177,8 +177,9 @@ Record the verdict with its commit and mode, `NOT REACHED`, and every finding; c
 - `changes required` → task `changes required`; respawn (§3) as rework.
 - `unverified` → put the reason to the human: review again (`reviewing`, §6) or treat as
   `blocked` (§5).
-- `approved` → for each medium or low finding, the human decides: a new task (plan
-  amendment) or a line in `known-issues.md`. Record each decision. Then §8.
+- `approved` → for each finding — medium, low, or `pre-existing` of any severity — the
+  human decides: a new task (plan amendment) or a line in `known-issues.md`. Record each
+  decision. Then §8.
 
 `known-issues.md` lines: `- YYYY-MM-DD <issue> — <why deferred> (task <id>, <severity>)`.
 
