@@ -63,8 +63,10 @@ without asking anyone.
   commit trace to them. A dropped requirement moves to `## Out of scope`.
 - Acceptance examples use concrete values. They are the source of the builder's expected
   results, so "works correctly" is not an example.
-- A quality the human wants — fast, easy, secure, reliable — is written with a number or
-  an example ("results within 2 seconds for 10,000 rows"), or not at all.
+- A quality the human wants — fast, easy, secure, reliable — becomes a requirement only with
+  a number or a concrete example the human agrees to ("results within 2 seconds for 10,000
+  rows", "a first-time user finds the export button without help"). A wish with neither
+  stays in `## Problem` as context, not as a requirement.
 - What the human wants later, not now, goes to `## Out of scope` as `later`. It returns
   only through a new discover session.
 - `## Open questions` exists only while drafting. The file is not offered for approval
@@ -73,8 +75,10 @@ without asking anyone.
 ## 4. Interview
 
 1. Write the draft from the request, putting every unknown under `## Open questions`. An
-   unknown is never filled with a plausible guess. Check the request against each area
-   below and add a question for every one it leaves open:
+   unknown is never filled with a plausible guess. Go through the areas below. Ask about an
+   area only when its answer could change a requirement, an acceptance example, a constraint
+   or a risk, and neither the request, the existing `PRD.md` nor the code already settles
+   it. A small change to an existing product usually touches two or three areas, not all:
 
    | Area | What has to be known |
    |---|---|
@@ -89,11 +93,11 @@ without asking anyone.
    | Model answers | Only when the product answers with a model: how a right answer is judged, with example questions and expected answers |
    | Not wanted | What it must not do, and what can wait |
 
-2. Ask one question at a time. Choose it from the open questions whose answer does not
-   depend on another open one; among those, the one that changes scope most goes first. A
-   question that depends on an unanswered one waits, and each answer can open new
-   questions — add them to the list. Never ask what §2 step 4 could look up. Give the human
-   choices to pick from, worded so that "yes" accepts the suggestion:
+2. Ask one question at a time, from the open questions whose answer does not depend on
+   another open one. Among those, ask first about data, sensitive personal data, and
+   anything with an effect outside the product; then the rest. A question that depends on
+   an unanswered one waits, and each answer can open new questions — add them to the list.
+   Never ask what §2 step 4 could look up. Give the human choices to pick from:
 
    ```
    <question> — <why it matters, one line>
@@ -103,12 +107,17 @@ without asking anyone.
    Suggested: B, because <reason>.
    ```
 
-   A free answer is accepted as well; the choices only make answering easier.
+   A free answer is accepted as well; the choices only make answering easier. A suggestion
+   is given only when it rests on something stated — the code, the project rules, an earlier
+   answer — and says what. A question only the human can know the answer to — who the users
+   are, what they do today, what they want — gets choices but no suggestion.
 3. Write each answer into `PRD.md` as soon as it is given, and remove the question. The
    session may end at any point.
-4. When the human cannot or will not answer, say that the item will be written as out of
-   scope, and move it to `## Out of scope` marked `unanswered` with the date. Never leave it
-   in the file as deferred.
+4. When the human cannot or will not answer, the item goes to `## Out of scope` marked
+   `unanswered` with the date — and so does every requirement that cannot be written
+   without that answer. Say which requirements go with it before moving them. If nothing
+   is left that can be built, say so: discover cannot finish until the human answers.
+   Never leave the item in the file as deferred.
 5. Collecting, storing or sending sensitive personal data — national ID numbers, health,
    biometric or financial account data — is the human's decision, asked as its own
    question. Record the answer under `## Constraints`; the task that builds it writes the
@@ -120,10 +129,13 @@ without asking anyone.
 
 1. Check `PRD.md`:
    - `## Open questions` is gone.
-   - Every requirement has an acceptance example with concrete values.
+   - Every requirement has an acceptance example with concrete values, and none of them
+     depends on an item marked `unanswered`.
    - `## Out of scope` is present, even if it holds only `none`.
    - No requirement names a framework, library or design.
-2. Commit it alone: `git add PRD.md`, then
+2. Commit it alone. `git diff --cached --name-only` must print nothing before you start; if
+   it lists files, stop and ask, since they are not this session's. Then `git add PRD.md`,
+   confirm the same command now prints only `PRD.md`, and
    `git commit -m "docs(prd): <what this version settles>"`.
 3. Ask the human to approve `PRD.md` as committed, naming the short SHA. Approval is the
    human saying so; silence or "looks fine so far" is not.
