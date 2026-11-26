@@ -15,8 +15,9 @@ that is `BLOCKED`, not a reason to widen it.
 never the data the application uses for real. A step with an outside effect — a message
 sent, a payment, a paid call, a change to a real service — is explained and approved first,
 as the project rules require for any such action. Temporary output never prints a secret or
-a person's data. Use the tools the project already has; installing one is a dependency
-change.
+a person's data. Data an experiment changes is a copy you can recreate; recreate it before
+the next run, so every run starts from the same state. Use the tools the project already
+has; installing one is a dependency change.
 
 Before the first temporary change, note `git status --porcelain`. Undo only what you added;
 changes that were there before are not yours to touch.
@@ -45,11 +46,12 @@ Find where a correct value first becomes wrong, using whichever of these fits:
   makes it pass.
 - **History.** When a known commit works, the reproducing command runs on the commits since,
   and it has no outside effect, `git bisect` finds the first bad commit:
-  - only with a clean tree (`git status --porcelain` empty);
+  - only with a clean tree (`git status --porcelain` empty); note HEAD and the branch, or
+    that HEAD is detached;
   - `git bisect start <bad> <good>`, then `git bisect run <reproducing command>` — exit 0
     means good, 125 skips a commit that cannot be tested, anything else means bad;
-  - always end with `git bisect reset`, and confirm that the branch
-    (`git symbolic-ref --short HEAD`) and HEAD are what they were before you edit anything.
+  - always end with `git bisect reset`, and confirm that HEAD and the branch are what you
+    noted before you edit anything.
 - **Path.** Follow the value from the input to the wrong output. Put temporary output — a
   print, a log line, an assertion — halfway along the path, run, and keep the half where it
   goes wrong. Repeat.
@@ -71,12 +73,13 @@ alone but wrong together. That place, or pair, is the cause under investigation.
 
 1. Write the test at the seam. It reproduces the bug, fails, and the failure comes from its
    assertion, for the reason the guess names. If no seam can capture the failure in a test,
-   stop (§5) and say why: the human decides how it is verified.
+   fix nothing: stop (§5) and say why. What happens next is the human's decision.
 2. Change the code at the cause, not where the symptom shows. Never change the expected
    value, skip the test, swallow the error, or special-case the input that reproduces it.
-3. The test passes. Undo the fix and it fails again; restore the fix. A test that passes
-   either way does not exercise the cause.
-4. Run every check command. If the test still fails or a check breaks that passed before,
+3. The test passes. Undo the fix and confirm it fails again, then restore the fix; a test
+   that passes either way does not exercise the cause.
+4. Run every check command — those the builder's prompt gives, or in a single session those
+   `CLAUDE.md` lists. If the test still fails or a check breaks that passed before,
    the fix failed: record an attempt, undo the change, and go back to §3 with what it
    showed.
 5. Remove all temporary output. `git status --porcelain` and `git diff` show nothing of it
@@ -97,7 +100,7 @@ alone but wrong together. That place, or pair, is the cause under investigation.
 - Stopping goes to the human, never to another agent or a session with wider permissions.
   Every stop carries the reproducing command, the original error and the attempts.
   - A builder returns `STRUCK_OUT` with every attempt under `ATTEMPTS`, and under `NEEDS`
-    the questions for the human. When it cannot reproduce (§1) or cannot capture the failure
+    the questions for the human, or the decision it needs. When it cannot reproduce (§1) or cannot capture the failure
     in a test (§4), it returns `BLOCKED` with what is needed under `NEEDS`.
   - A single session puts one decision to the human, in their language, with the options
     that fit. The usual ones:
