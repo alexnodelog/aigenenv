@@ -54,6 +54,7 @@ Uncommitted: <paths and what they are | none>
 
 ## Plan
 Status: drafting | awaiting approval | approved | blocked
+Target: <the branch tasks merge into>
 Needs: <the open decisions | none>
 
 ## Tasks
