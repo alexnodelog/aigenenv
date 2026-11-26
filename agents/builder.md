@@ -1,7 +1,7 @@
 ---
 name: builder
 description: Spawned by the orchestrate skill in the Build phase to implement one PLAN.md task in the task worktree it was given, including rework after a changes-required verdict and respawns after BLOCKED or STRUCK_OUT. Not for direct use, and never for a task the prompt does not name.
-tools: Read, Grep, Glob, Edit, Write, Bash
+tools: Read, Grep, Glob, Edit, Write, Bash, Skill
 ---
 
 ## Role

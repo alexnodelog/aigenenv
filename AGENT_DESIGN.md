@@ -12,7 +12,7 @@ An agent definition adds role-specific behaviour; it never relaxes a rule.
 **Precondition.** The `GLOBAL_RULES.md` changes in §9 are made. No file derived from this
 document is deployed before every skill an agent definition names exists, the way `CLAUDE.md` brings the
 rules into a subagent has been verified on the installed CLI, whether a subagent with no
-`skills:` field can invoke a skill has been verified on the installed CLI, and the human has
+`skills:` field but `Skill` in `tools` can invoke a skill has been verified on the installed CLI, and the human has
 confirmed
 that the machine agents run on holds no production credentials (§3), and agents run
 inside OS-level isolation that meets the agent-isolation requirement in `TECH_STACK.md`:
@@ -389,6 +389,10 @@ take any path. Neither is read-only by
 configuration. What holds instead: the reviewer works in a disposable worktree that is never
 merged, and the orchestrator's after-return check in §5 detects repository changes outside
 it and any planner write other than `PLAN.md`, within the limits stated there.
+
+`builder` lists `Skill`: a subagent whose `tools` omit it cannot load any skill, and the
+builder follows `diagnose` and `adr`. `planner` and `reviewer` follow no skill and do not list
+it.
 
 This is a single-CLI design kept convertible, not a proven vendor-independent one. Adopting
 a second CLI requires checking that its tool restriction and isolation give the same
