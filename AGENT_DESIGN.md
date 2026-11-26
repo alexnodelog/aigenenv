@@ -137,8 +137,10 @@ orchestrator lets the verdict stand only when both hold, with `state.md` and
    is empty — the merge brought in exactly the approved tree, with no hand-made conflict
    edits.
 
-If either fails, a `check`-mode reviewer runs on the merge commit before any dependent task
-starts. In a parallel run every merge after the first fails condition 1, so it is always
+If either fails, a `check`-mode reviewer runs on the merge commit before any other task
+starts. While any task is `merged` with its check not yet passed, `unverified` after its
+merge, or `integration failed`, no new task starts at all: a new task branches from the
+target branch, which is not yet known to be sound. In a parallel run every merge after the first fails condition 1, so it is always
 re-checked. That is a deliberate policy — two individually correct changes can break
 together — not something a smaller change scope could waive.
 
@@ -191,8 +193,10 @@ from that branch and never change `state.md`, so a merge always keeps the target
 version; there is nothing to reconcile. The orchestrator is the only writer even when tasks
 run in parallel — each task has its own section in the one file.
 
-**Ending the session.** When a `PLAN.md` task reaches `done` and no other task is `spawned`
-or `reviewing`, the orchestrator stops and tells the human to end this session. The human
+**Ending the session.** When a `PLAN.md` task reaches `done` and no other task started in
+this session is still on its way there — `spawned`, `built`, `reviewing`, `approved` or
+`merged` — the orchestrator stops and tells the human to end this session. A session thus
+takes one task, or one approved parallel pair, to `done`. The human
 starts a new session with `orchestrate`, which resumes from `state.md` as described under
 Resuming. It waits for running tasks because ending the session would end a subagent still
 working in it.
