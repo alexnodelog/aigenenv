@@ -88,7 +88,8 @@ timeout, a missing tool — leaves that check unverified. Decide in this order; 
 that applies is the verdict:
 
 1. HEAD moved, or the tree is dirty → `unverified`.
-2. A reproduced critical or high finding → `changes required`.
+2. A reproduced critical or high finding the reviewed range introduced → `changes required`.
+   A `pre-existing` one is listed and does not decide the verdict.
 3. A central check not verified → `unverified`.
 4. Otherwise → `approved`. Medium and low findings are still listed.
 
