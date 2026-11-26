@@ -27,7 +27,9 @@ without asking anyone.
    - **Reopened by the planner:** the `PRD:` items under `state.md` `## Plan` → `Needs`.
      Only those questions are reopened.
    - **Revision asked by the human:** the change they described.
-3. Read `PRD.md` if it exists. If it is approved, every change here needs a new approval.
+3. Read `PRD.md` if it exists. `git status --porcelain PRD.md` must be empty: changes this
+   session did not make are the human's — stop and ask. If `PRD.md` is approved, from the
+   first edit here the approval no longer covers it, and it needs a new approval (§5).
 4. Look up every fact the code or the files can answer — what exists, what it is called,
    what it does now — before forming any question.
 
@@ -45,7 +47,7 @@ without asking anyone.
 ## Requirements
 ### R1: <one behaviour, as the user sees it>
 - Acceptance: <input or situation> → <expected result>; at least one worked example
-- Limits and errors: <input limits, error cases and what the user sees | none stated>
+- Limits and errors: <input limits, error cases and what the user sees | none>
 
 ## Constraints
 - <stated by the human: where it runs, network, data it keeps, deadlines | none>
@@ -63,12 +65,15 @@ without asking anyone.
   commit trace to them. A dropped requirement moves to `## Out of scope`.
 - Acceptance examples use concrete values. They are the source of the builder's expected
   results, so "works correctly" is not an example.
-- A quality the human wants — fast, easy, secure, reliable — becomes a requirement only with
-  a number or a concrete example the human agrees to ("results within 2 seconds for 10,000
-  rows", "a first-time user finds the export button without help"). A wish with neither
-  stays in `## Problem` as context, not as a requirement.
-- What the human wants later, not now, goes to `## Out of scope` as `later`. It returns
-  only through a new discover session.
+- A quality the human wants — fast, easy, secure, reliable — becomes a requirement only in
+  a checkable form the human agrees to: a number ("results within 2 seconds for 10,000
+  rows"), an example ("a first-time user finds the export button without help"), or a rule
+  that must always hold with how to check it ("one user never sees another's records:
+  signed in as A, asking for B's record is refused"). A wish in none of these forms stays in
+  `## Problem` as context, not as a requirement.
+- `## Out of scope` holds three different things: `not wanted` is a decision; `later` is
+  wanted but not now; `unanswered` is undecided (§4 step 4). A `later` or `unanswered` item
+  returns only through a new discover session.
 - `## Open questions` exists only while drafting. The file is not offered for approval
   until that section is gone.
 
@@ -83,12 +88,12 @@ without asking anyone.
    | Area | What has to be known |
    |---|---|
    | Problem | What goes wrong today, and what the user does instead |
-   | Users | Who, how many, how often, on what device; whether they sign in |
+   | Users | Who, how many, how often, on what device; whether they sign in; whether they see each other's data, and who may change or delete what |
    | Core actions | What the user does, step by step, and what they get back |
-   | Data | What is entered, shown and kept; for how long; whether it must survive a reinstall; whether any of it is sensitive personal data |
+   | Data | What is entered, shown and kept; for how long; whether it must survive a reinstall; what deleting it removes; whether it can be exported or restored; whether any of it is sensitive personal data |
    | Where it runs | PC, browser or phone; with or without a network; who installs it |
-   | Outside services | Anything it sends to or receives from another system; any cost or message it can cause |
-   | Errors and edges | Empty input, wrong input, too much input, no network, a failed step halfway |
+   | Outside services | Anything it sends to or receives from another system; any cost or message it can cause; what the user sees when the call fails or its result is unknown |
+   | Errors and edges | Empty input, wrong input, too much input, no network; the same action twice or at once; dates and times — whose time zone; a step that fails halfway — what is kept and whether it can be run again |
    | Look | Existing screens, mockups or examples to follow, or none |
    | Model answers | Only when the product answers with a model: how a right answer is judged, with example questions and expected answers |
    | Not wanted | What it must not do, and what can wait |
@@ -97,7 +102,8 @@ without asking anyone.
    another open one. Among those, ask first about data, sensitive personal data, and
    anything with an effect outside the product; then the rest. A question that depends on
    an unanswered one waits, and each answer can open new questions — add them to the list.
-   Never ask what §2 step 4 could look up. Give the human choices to pick from:
+   Never ask what §2 step 4 could look up. Where the question has real alternatives, give
+   the human choices to pick from; otherwise ask it plainly:
 
    ```
    <question> — <why it matters, one line>
@@ -120,9 +126,12 @@ without asking anyone.
    Never leave the item in the file as deferred.
 5. Collecting, storing or sending sensitive personal data — national ID numbers, health,
    biometric or financial account data — is the human's decision, asked as its own
-   question. Record the answer under `## Constraints`; the task that builds it writes the
-   ADR.
-6. Before the session might run out of room, run skill `handoff` with
+   question. If they say yes, ask in turn: why it is needed, the least that will do, where it
+   is kept, who may see it, how long it is kept and how it is deleted, and whether it ever
+   leaves the product. Each answer becomes a requirement or a constraint; an unanswered one
+   follows step 4. The task that builds it writes the ADR.
+6. Whenever the session stops before approval — the human pauses, the session is running
+   out of room, or anything else — run skill `handoff` with
    `## Next`: `Continue discover: <the next open question>`.
 
 ## 5. Finish
@@ -131,19 +140,25 @@ without asking anyone.
    - `## Open questions` is gone.
    - Every requirement has an acceptance example with concrete values, and none of them
      depends on an item marked `unanswered`.
+   - Every requirement's `Limits and errors` says what happens, or `none` after the
+     relevant areas were considered.
    - `## Out of scope` is present, even if it holds only `none`.
    - No requirement names a framework, library or design.
 2. Commit it alone. `git diff --cached --name-only` must print nothing before you start; if
    it lists files, stop and ask, since they are not this session's. Then `git add PRD.md`,
    confirm the same command now prints only `PRD.md`, and
    `git commit -m "docs(prd): <what this version settles>"`.
-3. Ask the human to approve `PRD.md` as committed, naming the short SHA. Approval is the
-   human saying so; silence or "looks fine so far" is not.
+3. Ask the human to approve `PRD.md` as committed, naming the short SHA: the approval is
+   for the whole file at that commit. Approval is the human saying so without conditions;
+   silence, "looks fine so far" or "approved, but …" is not. An unclear reply — "nice",
+   "should be fine" — is answered by asking once whether that is approval.
 4. When they approve, record it with skill `handoff` §5, on the branch tasks will merge
    into, and set `## Next` to `Start orchestrate in a new session`. If this session was
    reopened by the planner, set the plan `Status` to `blocked` with `Needs: none — PRD
    re-approved, respawn the planner`.
-5. Tell the human to end this session and start the next one with `orchestrate`.
+5. Tell the human the next step is `orchestrate` in a new session, now or whenever they
+   are ready.
 
-A change to `PRD.md` after approval goes through §4 and §5 again; the old approval line is
-kept as superseded.
+A change to `PRD.md` after approval goes through §4 and §5 again. The new commit is made
+first, then the new approval is recorded in `state.md` (skill `handoff` §5), which keeps the
+earlier approval line there marked superseded.
