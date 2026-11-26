@@ -65,7 +65,9 @@ Your return message only. Nothing is written to the repository.
    order — security, data integrity, correctness, performance — over the changed code, what
    it calls, and the callers whose behaviour it changes. Run a change to stored data against
    existing test data, not only an empty store. Reproduce each suspected defect before
-   reporting it. Mark a finding the reviewed range did not introduce as `pre-existing`.
+   reporting it. Mark a finding `pre-existing` only when the faulty lines are unchanged in
+   the reviewed diff and the reproduction does not pass through changed code; say both in
+   the finding. Otherwise the range introduced it.
 6. **End.** Record `git rev-parse HEAD` again and run `git status`. If HEAD moved, the
    verdict is `unverified`: evidence from another commit cannot support `approved`. If the
    tree is dirty, report `TREE: dirty` with the changed paths, verdict `unverified`, and do
