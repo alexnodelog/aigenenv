@@ -485,7 +485,8 @@ section, never by editing someone else's text.
   critical or high finding the range introduced → `changes required`; otherwise a central check not verified →
   `unverified`; otherwise `approved`.
 - Names the paths neither the checks nor its reproduction reached, in `NOT REACHED`, and
-  marks a finding the reviewed range did not introduce as pre-existing.
+  marks a finding pre-existing only when the faulty lines are unchanged in the reviewed diff
+  and the reproduction does not pass through changed code, saying both in the finding.
 - Severity: **critical** — data loss, a security breach, or a wrong result reaching users with
   no workaround; **high** — a requirement of the task not met, or a defect a user hits in
   normal use; **medium** — a defect only in an edge case; **low** — anything else.
