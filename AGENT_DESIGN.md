@@ -482,15 +482,16 @@ section, never by editing someone else's text.
   verifying — a check that errors before it tests anything, a timeout, a missing tool, an
   unrun central check — is `unverified`, never `approved`.
 - Verdict precedence: HEAD moved or tree dirty → `unverified`; otherwise a reproduced
-  critical or high finding → `changes required`; otherwise a central check not verified →
+  critical or high finding the range introduced → `changes required`; otherwise a central check not verified →
   `unverified`; otherwise `approved`.
 - Names the paths neither the checks nor its reproduction reached, in `NOT REACHED`, and
   marks a finding the reviewed range did not introduce as pre-existing.
 - Severity: **critical** — data loss, a security breach, or a wrong result reaching users with
   no workaround; **high** — a requirement of the task not met, or a defect a user hits in
   normal use; **medium** — a defect only in an edge case; **low** — anything else.
-- Any critical or high finding is `changes required`. With only medium or low findings the
-  verdict is `approved` and the findings are listed; the orchestrator records them and the
+- Any critical or high finding the range introduced is `changes required`. With only medium
+  or low findings, or `pre-existing` ones, the verdict is `approved` and the findings are
+  listed; the orchestrator records them and the
   human decides at merge whether each becomes a new task or goes to `known-issues.md`.
 - Both modes run the checks the project configures, in this order where present — type
   check, lint, build, test — read the diff against the task, and reproduce the central claim
