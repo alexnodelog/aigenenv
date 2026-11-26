@@ -160,12 +160,16 @@ it as `Last commit` with a `Human` entry; the next builder starts from it.
 
 ## 6. Review
 
-1. Record task `reviewing`, commit.
-2. If `../<repo>.worktrees/review-<id>-<short SHA>` is left from an earlier review: remove
-   it when its `git status --porcelain` is empty; otherwise stop — the human clears it. Then
-   `git worktree add --detach <that path> <Last commit>`; confirm its HEAD.
-3. Snapshot (§4), then spawn the `reviewer`. Prompt: the task text, base `Base` and head
-   `Last commit`, the mode from `PLAN.md`, the check commands, the review worktree's absolute
+The range under review is base `Base`, head `Last commit`, in the mode from `PLAN.md`. For a
+merge check (§8 step 4) it is base `<merge>^1`, head `<merge>`, in `check` mode, and the
+task stays `merged` until the verdict.
+
+1. Except for a merge check, record task `reviewing`, commit.
+2. If `../<repo>.worktrees/review-<id>-<short SHA of head>` is left from an earlier review:
+   remove it when its `git status --porcelain` is empty; otherwise stop — the human clears
+   it. Then `git worktree add --detach <that path> <head>`; confirm its HEAD equals head.
+3. Snapshot (§4), then spawn the `reviewer`. Prompt: the task text, base and head, the
+   mode, the check commands, the review worktree's absolute
    path, the live checks approved for this run. Never the builder's message.
 4. Check the return (§4). Remove the review worktree only when its `git status --porcelain`
    is empty (`git worktree remove <path>`, never `--force`).
@@ -175,8 +179,8 @@ it as `Last commit` with a `Human` entry; the next builder starts from it.
 Record the verdict with its commit and mode, `NOT REACHED`, and every finding; commit.
 
 - `changes required` → task `changes required`; respawn (§3) as rework.
-- `unverified` → put the reason to the human: review again (`reviewing`, §6) or treat as
-  `blocked` (§5).
+- `unverified` → put the reason to the human: review again (§6; a merge check again when
+  `Merged` is recorded) or treat as `blocked` (§5).
 - `approved` → for each finding — medium, low, or `pre-existing` of any severity — the
   human decides: a new task (plan amendment) or a line in `known-issues.md`. Record each
   decision. Then §8.
@@ -228,7 +232,8 @@ merge check then finds the hand edits and §8 step 4 reviews them), or runs
    a `check`-mode reviewer on the merge commit (§6, base `<merge>^1`, head `<merge>`). Its
    verdict: `approved` → `done`; `unverified` → task `unverified`; `changes required` →
    `integration failed`. The human adds one or more fix tasks by plan amendment (§2); record
-   their ids under this task's `Human` as `fix: <ids>`. Only they may start (§3). When every
+   their ids under this task's `Human` as `fix: <ids>`, each a task in the approved
+   `PLAN.md`. Only they may start (§3). When every
    recorded fix task is `done`, this task is `done`.
 5. On `done`: remove the task worktree if its `git status --porcelain` is empty
    (`git worktree remove`, never `--force`). Branches are never deleted by an agent. Fold the
@@ -237,8 +242,9 @@ merge check then finds the hand edits and §8 step 4 reviews them), or runs
 ## 9. Ending the session
 
 One session takes one task — or one parallel pair — to `done`. When a task reaches `done`
-and every other task started in this session is `done` or waiting on the human (`blocked`,
-`struck out`, `unverified`, `integration failed`), set `## Next` to the next action, commit, and
+and every other task started in this session is `done`, `integration failed` (its fix tasks
+start in a later session), or `blocked`, `struck out` or `unverified` with the human's
+decision not yet recorded, set `## Next` to the next action, commit, and
 tell the human to end this session and start a new one with `orchestrate`. Never end it
 while a subagent is still running.
 
